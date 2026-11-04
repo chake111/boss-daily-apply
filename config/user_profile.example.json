@@ -1,0 +1,36 @@
+{
+  "_note": "复制成 <工作目录>/user_profile.json 后逐项改成你自己的。这份档案是 AI 语义终审的唯一依据：role_summary 写不准，判出来的结果就不准。不要在代码里找筛选规则——代码里一条都没有。",
+  "name": "",
+  "experience": "【一段话把你的学历、届别、技术栈、项目写清楚。AI 判『这个岗位对不上你的经历』时看的就是这段。示例：XX 大学 2027 届本科在读，主修 Java / Python / 数据库 / Web 前端。三个全栈项目：① 预约系统（Spring Boot 3 + Vue 3 + MySQL，12 张表 54 个接口）；② AI 工具推荐站（Next.js + TypeScript）；③ 点餐订单履约系统（Spring Boot + Redis）。】",
+  "target_city": "深圳",
+  "city_code": "101280600",
+  "min_salary_k": 0,
+  "role_summary": "【一句话讲清你要找什么岗位，这一段是审核核心。示例：2027 届本科在读，求职 Java 后端开发实习 / 前端开发实习。可长期实习，期望工作地深圳。】",
+  "prefer": [
+    "Java 后端开发实习",
+    "前端开发实习",
+    "全栈开发实习",
+    "AI 应用开发实习"
+  ],
+  "avoid": [
+    "销售",
+    "市场推广",
+    "电话客服",
+    "非技术岗位",
+    "要求 3 年以上工作经验",
+    "外包派遣/人力驻场"
+  ],
+  "_direction_mix_note": "direction_mix 可选。填了会覆盖 config/supply_mix.json 的 mix。按你简历里各方向的证据强度分配，不要按岗位供给多少分配。",
+  "direction_mix": {
+    "前端开发": 0.40,
+    "Java后端": 0.25,
+    "AI应用开发": 0.20,
+    "数据开发": 0.05,
+    "其他": 0.10,
+    "用不上": 0.00
+  },
+  "own_greeting_prefix": "【你在 BOSS 设置里那套默认招呼语的开头 8~12 个字。reply_check 靠它判断「最后一条是不是我发的」，留空会让回复率虚高。】",
+  "prefer_no_big_company": false,
+  "prefer_no_headhunter": false,
+  "accept_note": "在校生，可实习，每周到岗天数可与 HR 沟通；实习薪资不设硬性下限。"
+}

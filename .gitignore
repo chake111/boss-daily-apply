@@ -1,0 +1,32 @@
+# 运行状态：账号相关，绝不进版本库
+walk_state.json
+stream_progress.json
+reply_log.json
+reply_events.jsonl
+pending_actions.json
+img_mode_log.json
+resume_bundle_log.json
+resume_img_log.json
+daily_log.json
+supply.json
+投递汇总.html
+回复率报表.md
+diag_*.json
+user_profile.json
+
+# 个人素材
+resume/
+assets/
+*.png
+*.jpg
+*.jpeg
+
+# 临时脚本与缓存
+tmp_*.py
+__pycache__/
+*.py[cod]
+.DS_Store
+.venv/
+
+# 本地测试工作目录
+.tmp-*/
