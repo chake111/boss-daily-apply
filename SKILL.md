@@ -82,7 +82,7 @@ scripts/
   selftest.py       自检 27 项（含 headless 点击）—— 改完代码先跑它
 references/
   runbook.md        11 步完整执行细节 —— 遇到分支先查这里
-  pitfalls.md       24 条踩坑，照做即可
+  pitfalls.md       25 条踩坑，照做即可
   metrics.md        回复率口径与 A/B 纪律
   judgment.md       判定标准 + 边界案例表
   portability.md    环境适配：没有 Chrome / 不用 WorkBuddy 怎么办
@@ -120,9 +120,22 @@ python "$SKILL_DIR/scripts/ledger.py" status
 先确认自动化通道。**没有扩展不是问题**，CDP 这条路一样能自动点：
 
 ```bash
-python "$SKILL_DIR/scripts/cdp_client.py" --check    # 有调试端口就绪就直接开工
-python "$SKILL_DIR/scripts/cdp_client.py" --launch   # 没就绪就起一个（首次扫码登录一次）
+python "$SKILL_DIR/scripts/cdp_client.py" --check    # 端口已就绪就直接开工
 ```
+
+没就绪就起一个。**注意用 `--serve` 并放进后台任务**，不要用前台 `--launch`：
+
+```bash
+python "$SKILL_DIR/scripts/cdp_client.py" --serve --url https://www.zhipin.com/web/geek/jobs
+```
+
+> 为什么必须 `--serve`：不少宿主（IDE / 智能体 / 沙箱）会在命令结束时回收整棵进程树，
+> 单独 `Popen` 的浏览器会被一起杀掉，端口随即消失——表现是"刚启动就查不到"。
+> `--serve` 留一个常驻父进程挡住回收。**这一轮投递期间它会一直跑着，别中途关掉。**
+> 人自己在终端里跑，用 `--launch` 就够。
+
+首次要在这个窗口里扫码登录一次 BOSS直聘，之后登录态存在独立 profile
+（`<工作目录>/browser-profile`）里，长期有效。
 
 有 WebBridge 扩展的，起一下服务即可，脚本会自动优先用它：
 

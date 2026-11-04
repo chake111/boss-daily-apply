@@ -66,7 +66,8 @@ python scripts/selftest.py                    # 27 项自检，含一次真浏�
 python scripts/install.py --list              # 你的智能体该装哪
 python scripts/install.py --target claude     # 或 workbuddy / cursor / codex / plain
 python scripts/bootstrap.py                   # 建工作目录、拷配置、建 resume 目录
-python scripts/cdp_client.py --launch         # 起浏览器（免扩展），首次扫码登录一次
+python scripts/cdp_client.py --serve          # 起浏览器（免扩展），首次扫码登录一次；
+                                              # 智能体里请丢到后台任务，否则进程树会被回收
 python scripts/env_check.py                   # 浏览器 / 通道 / 登录态 三条自检
 ```
 
@@ -132,7 +133,7 @@ scripts/
 references/
   runbook.md        11 步完整执行细节
   judgment.md       判定标准 + 23 条边界案例
-  pitfalls.md       24 条踩坑（现象 → 根因 → 处置）
+  pitfalls.md       25 条踩坑（现象 → 根因 → 处置）
   metrics.md        回复率口径与 A/B 实验纪律
   portability.md    环境适配：没有 Chrome / 不用 WorkBuddy 怎么办
   dom_structure.md  BOSS 页面选择器实测对照表

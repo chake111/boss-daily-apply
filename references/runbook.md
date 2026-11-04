@@ -66,8 +66,17 @@ $DRV reject <jobId>        # 判否留痕
 
 ```bash
 python "$SKILL_DIR/scripts/cdp_client.py" --check     # CDP 就绪？
-python "$SKILL_DIR/scripts/cdp_client.py" --launch    # 没就绪就起一个（首次扫码登录一次）
 ```
+
+没就绪 → **用 `--serve` 放后台任务**（不是前台 `--launch`）：
+
+```bash
+python "$SKILL_DIR/scripts/cdp_client.py" --serve --url https://www.zhipin.com/web/geek/jobs
+```
+
+**为什么必须 `--serve`**：很多宿主会在命令结束时回收整棵进程树，单独 spawn 的浏览器
+会被一起杀掉、端口消失，表现成"刚启动就查不到"。`--serve` 留一个常驻父进程挡住回收。
+这一轮投递期间它要一直跑着。人在终端里手动用时 `--launch` 即可。
 
 ```bash
 curl -s --noproxy '*' http://127.0.0.1:10086/status  # 有 WebBridge 扩展就顺手看一眼

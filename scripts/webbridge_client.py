@@ -121,6 +121,8 @@ def backend(force=False):
     没有扩展就退到 CDP。结果缓存 15 秒，避免每个动作都探一次端口。
     """
     want = (os.environ.get("BOSS_BACKEND") or "").strip().lower()
+    if want in ("none", "off"):
+        return ""                     # 强制"无后端"，用于自检和排障
     if want in ("webbridge", "cdp"):
         return want
     now = time.time()
@@ -807,7 +809,7 @@ def require_bridge(host=DEFAULT_HOST, port=DEFAULT_PORT):
     为什么不在 api() 里抛异常：上层脚本太多，每个都要包一层 try；
     统一在这里挡住，输出比 ConnectionRefusedError 的堆栈有用得多。
     """
-    if bridge_alive(host, port) or _cdp_ready():
+    if backend() and (bridge_alive(host, port) or _cdp_ready()):
         return True
     exe = os.path.normpath(os.path.expanduser(
         os.path.join("~", ".kimi-webbridge", "bin", "kimi-webbridge.exe")))

@@ -26,8 +26,10 @@ VERBOSE = "-v" in sys.argv
 passed, failed = [], []
 
 
-def run(args, workdir, expect_ok=True):
+def run(args, workdir, expect_ok=True, extra_env=None):
     env = dict(os.environ, BOSS_WORKDIR=workdir, PYTHONPATH=ROOT, BOSS_DEBUG="")
+    if extra_env:
+        env.update(extra_env)
     p = subprocess.run([PY] + args, cwd=ROOT, env=env,
                        capture_output=True, text=True, encoding="utf-8", errors="ignore")
     out = (p.stdout or "") + (p.stderr or "")
@@ -150,9 +152,12 @@ def main():
             (open(os.path.join(wd, "diag_1.json"), "w").close(),
              run(["scripts/cleanup.py", "--dry-run"], wd))[1], "diag_1.json"))
 
-        print("\n[7] 无桥时的报错可读")
-        check("driver 无桥 -> 修复指引（退出码 2）", lambda: _expect(
-            run(["scripts/_live_driver.py", "walk"], wd, expect_ok=False), "不是脚本坏了"))
+        print("\n[7] 无通道时的报错可读")
+        # BOSS_BACKEND=none 把两条通道都按掉，保证测的是"没环境"这条分支，
+        # 不受本机是否正好开着浏览器 / WebBridge 影响
+        check("driver 无通道 -> 修复指引（退出码 2）", lambda: _expect(
+            run(["scripts/_live_driver.py", "walk"], wd, expect_ok=False,
+                extra_env={"BOSS_BACKEND": "none"}), "不是脚本坏了"))
 
         print("\n[8] 通用性：换浏览器 / 换智能体 / 无浏览器")
         # 记账测的是"全新用户的空台账"，所以另开一个干净目录，别被上面的 fixture 干扰

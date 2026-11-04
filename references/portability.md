@@ -30,10 +30,15 @@ Chromium 系浏览器自带 **DevTools 协议（CDP）**，启动时加一个调
 执行 JS、点击元素、导航、开新标签——这正是"自动投递"需要的全部能力，**不需要任何扩展**。
 
 ```bash
-python scripts/cdp_client.py --launch     # 起一个带调试端口的浏览器
+python scripts/cdp_client.py --launch     # 人用：命令立刻返回，浏览器留在桌面上
+python scripts/cdp_client.py --serve      # 智能体用：常驻，防止进程树被宿主回收
 python scripts/cdp_client.py --check      # 确认端口就绪、列出标签页
 python scripts/env_check.py               # 三条自检
 ```
+
+> **`--serve` 和 `--launch` 的区别很关键**：不少宿主（IDE / 智能体 / 沙箱）会在命令结束时
+> 回收整棵进程树，单独 spawn 的浏览器会被一起杀掉，端口随即消失——表现成"刚启动就查不到"。
+> `--serve` 留一个常驻父进程挡住回收，这一轮投递期间要一直跑着。
 
 首次要在这个新窗口里**扫码登录一次 BOSS直聘**。之后登录态存在独立 profile 里
 （`<工作目录>/browser-profile`），下次直接可用。

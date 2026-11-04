@@ -25,8 +25,21 @@ WebBridge 用扩展 + 本地服务提供它们；Chromium 自带的 **DevTools �
 只用标准库：手写 RFC6455 客户端（握手 + 掩码帧 + 分片 + ping/pong），
 上层是 CDP 的 JSON-RPC。没有 playwright / selenium / websocket-client 依赖。
 
-自检（不需要登录 BOSS）：
-    python scripts/cdp_client.py --selftest
+用法：
+    python scripts/cdp_client.py --launch          # 起浏览器（人用，命令立刻返回）
+    python scripts/cdp_client.py --serve           # 起浏览器并常驻（智能体用，丢后台）
+    python scripts/cdp_client.py --launch --url https://www.zhipin.com/web/geek/jobs
+    python scripts/cdp_client.py --check           # 端口就绪？列出标签页
+    python scripts/cdp_client.py --selftest        # 不需要登录，跑一遍全链路
+
+--launch 与 --serve 的区别（很重要）
+------------------------------------
+有些宿主（IDE / 智能体 / 沙箱）会在命令结束时把整棵进程树回收，单独 Popen 出去的
+浏览器会被一起杀掉，调试端口随之消失——表现为"刚启动就查不到"。`--serve` 会留一个
+常驻父进程挡住这次回收。
+
+    · 智能体驱动：`--serve` + 后台任务
+    · 人自己在终端跑：`--launch` 就够（终端不关，浏览器就在）
 """
 import base64
 import hashlib
@@ -299,24 +312,27 @@ def targets(port=DEFAULT_PORT):
     return [t for t in raw if t.get("type") == "page"]
 
 
-_INTERNAL = ("chrome://", "edge://", "devtools://", "about:blank", "chrome-extension://")
+_BAD_SCHEMES = ("chrome://", "edge://", "devtools://", "chrome-extension://")
 
 
 def page_target(port=DEFAULT_PORT, url_contains=None):
     """挑一个可操作的页面。
 
-    先排除浏览器自己的内部页（edge://settings、chrome://newtab 这类连不上 DOM），
-    否则 --launch 之后第一个目标常常是同步引导页，evaluate 直接报错。
+    · 跳过浏览器自己的内部页（edge://settings、chrome://newtab 这类连不上 DOM）
+    · about:blank 是可用的（能 evaluate、能导航），只是排在真实网页后面
+    · 都没有才退回第一个目标
     """
     ts = targets(port)
     if url_contains:
         for t in ts:
             if url_contains in (t.get("url") or ""):
                 return t
-    for t in ts:
-        u = t.get("url") or ""
-        if not u.startswith(_INTERNAL):
-            return t
+    usable = [t for t in ts if not (t.get("url") or "").startswith(_BAD_SCHEMES)]
+    real = [t for t in usable if not (t.get("url") or "").startswith("about:")]
+    if real:
+        return real[0]
+    if usable:
+        return usable[0]
     return ts[0] if ts else None
 
 
@@ -619,17 +635,38 @@ def main():
         for t in targets(port):
             print("  - %s  %s" % (t.get("title", "")[:40], (t.get("url") or "")[:70]))
         return 0
-    if "--launch" in args:
+    if "--launch" in args or "--serve" in args:
         port = int(os.environ.get("BOSS_CDP_PORT") or DEFAULT_PORT)
         headless = "--headless" in args
         browser = ""
         if "--browser" in args:
             browser = args[args.index("--browser") + 1]
-        ok, msg = launch(port=port, browser_path=browser or None, headless=headless)
-        print(("✓ " if ok else "✗ ") + msg)
+        url = ""
+        if "--url" in args:
+            url = args[args.index("--url") + 1]
+        ok, msg = launch(port=port, browser_path=browser or None,
+                         headless=headless, url=url or None)
+        print(("✓ " if ok else "✗ ") + msg, flush=True)
+
+        # --serve：启动后自己常驻，浏览器作为子进程跟着活。
+        # 为什么需要它：某些宿主（IDE / 智能体 / 沙箱）会在命令结束时回收整棵进程树，
+        # 单独 Popen 出来的浏览器会立刻被杀。留一个常驻父进程是最省事、最可靠的办法。
+        # 智能体里这样用：把这条命令丢到后台任务里跑，后续命令照常用的调试端口访问。
+        if ok and "--serve" in args:
+            print("CDP 常驻中（结束本进程浏览器会一起退出）。端口 %d，可用 "
+                  "python scripts/cdp_client.py --check 验证。" % port, flush=True)
+            try:
+                while True:
+                    time.sleep(20)
+                    if not available(port):
+                        print("✗ 端口已消失，浏览器可能被关掉了", flush=True)
+                        return 1
+            except KeyboardInterrupt:
+                return 0
+
         if ok:
             print("下一步：在打开的窗口里登录 BOSS直聘（只需一次），然后")
-            print("  BOSS_BACKEND=cdp python scripts/env_check.py")
+            print("  python scripts/env_check.py")
         return 0 if ok else 1
     print(__doc__)
     return 0
