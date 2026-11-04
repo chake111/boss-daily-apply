@@ -6,10 +6,14 @@
 
 | 通道 | 需要什么 | 适合谁 |
 |---|---|---|
-| **CDP**（推荐） | 任意 Chromium 系浏览器，**不用装任何扩展** | 公司电脑装不了扩展、只有 Edge、不想折腾 |
+| **Playwright**（首选） | `pip install playwright`（39MB，不下载浏览器内核） | 想省心，让库去处理等待/重试/上传 |
+| **内置 CDP** | 什么都不装 | 装不了包、离线、或就是不想装 |
 | **WebBridge** | Chromium 浏览器 + Kimi WebBridge 扩展 | 已经有这个扩展的人 |
 
+三条共用同一个调试端口和同一套上层命令，随时能换。
 只有**一个 Chromium 浏览器都没有**时，才会退到手动记账模式。
+
+> 走 `python scripts/onboard.py` 就行，它会问你信息、说明要装什么、征得同意后再装。
 
 ---
 
@@ -196,7 +200,7 @@ CDP 是协议级能力，不依赖任何平台的专有组件——所以在三�
 ```bash
 git clone https://github.com/chake111/boss-daily-apply.git
 cd boss-daily-apply
-python scripts/selftest.py            # 27 项自检（含一次真浏览器点击）
+python scripts/selftest.py            # 28 项自检（含一次真浏览器点击）
 python scripts/install.py --list      # 你的智能体该装哪
 python scripts/bootstrap.py           # 建工作目录
 python scripts/cdp_client.py --launch # 起浏览器（首次扫码登录一次）

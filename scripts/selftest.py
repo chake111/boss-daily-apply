@@ -184,6 +184,8 @@ def main():
         check("安装器支持 cursor 规则（dry-run）", lambda: _expect(
             run(["scripts/install.py", "--target", "cursor", "--project", wd, "--dry-run"], wd),
             ".cursor"))
+        check("首次向导体检模式可用", lambda: _expect(
+            run(["scripts/onboard.py", "--check"], wd), "环境可用"))
 
         if "--no-browser" not in sys.argv:
             print("\n[9] CDP 后端：免扩展也能自动点（真起一个 headless 浏览器）")

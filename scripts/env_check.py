@@ -121,29 +121,66 @@ def _check_boss_login():
         from scripts.webbridge_client import api, evaluate as _ev
         import time as _t
 
-        # 先导航到 Boss 推荐页，确保读到的是目标页面（而非其它空白标签页）
+        # 先导航到 Boss 推荐页，确保读到的是目标页面（而非其它标签页）。
+        # 这里不"睡固定秒数就看结果"——导航可能还没提交，也可能被上一轮的
+        # 未完成跳转覆盖。改成：导航 → 轮询落地 URL → 不对就再导航一次。
         RECOMMEND_URL = "https://www.zhipin.com/web/geek/jobs?ka=header-jobs"
-        try:
-            _ev  # noqa
-            api("navigate", {"url": RECOMMEND_URL})
-            _t.sleep(6)
-        except Exception:
-            pass
+        landed = False
+        for _ in range(3):
+            try:
+                api("navigate", {"url": RECOMMEND_URL})
+            except Exception as e:
+                if os.environ.get("BOSS_DEBUG"):
+                    print("[env_check] 导航失败: %s" % str(e)[:160], file=sys.stderr)
+            for _ in range(10):
+                cur = _ev("location.href") or ""
+                if "zhipin.com" in cur:
+                    landed = True
+                    break
+                _t.sleep(0.4)
+            if landed:
+                break
+            _t.sleep(1.0)
 
-        body_text = _ev("document.body.innerText || ''") or ""
-        login_wall_kws = ["请登录", "立即登录", "扫码登录", "账号密码登录", "手机号登录"]
+        if not landed:
+            cur = _ev("location.href") or ""
+            return False, ("没打开 BOSS 页面（当前：%s），无法确认登录态。\n"
+                           "   先确认浏览器能访问 https://www.zhipin.com" % (cur[:70] or "空"))
+
+        # 等首屏渲染出来再判（SPA 冷启动要几秒，别把"还没渲染"当成"未登录"）
+        body_text = ""
+        for _ in range(20):
+            body_text = _ev("document.body.innerText || ''") or ""
+            if len(body_text.strip()) > 100:
+                break
+            _t.sleep(0.7)
+
+        # 匿名访问时导航栏是"登录/注册"，这是最可靠的未登录信号。
+        # 之前漏了它，导致只看 body 长度就判"已登录"——页面上全是岗位文案，
+        # 长度永远够，于是未登录也会显示 ✓，直到投递那一步才炸。
+        login_wall_kws = ["登录/注册", "请登录", "立即登录", "扫码登录",
+                          "账号密码登录", "手机号登录"]
+        head = body_text[:400]           # 只看首屏导航区，避免命中岗位描述里的"登录"
         for kw in login_wall_kws:
-            # 短文本命中且是主导航区特征（避免误判岗位描述中的"登录"）
-            if kw in body_text and body_text.index(kw) < 200:
+            if kw in head:
                 return False, (
-                    "Boss 直聘未登录或登录态已过期。\n"
-                    "   请在浏览器中打开 https://www.zhipin.com 并完成登录，\n"
-                    "   本流程需复用您的登录数据才能投递。"
+                    "Boss 直聘未登录或登录态已过期（导航栏显示「%s」）。\n"
+                    "   请在浏览器中打开 https://www.zhipin.com 扫码登录，\n"
+                    "   本流程需复用你的登录数据才能投递。" % kw
                 )
 
-        # 已登录标志：body 足够长（说明已加载推荐内容）且无登录墙
-        if len(body_text.strip()) > 100:
+        # 已登录的正面信号：导航栏出现了"消息/简历"这类只有登录后才有的入口。
+        # 只靠"没有登录入口"就判已登录是不行的——BOSS 的中间页、安全校验页
+        # 也不含"登录/注册"，会被误判成已登录。
+        positive = ("消息" in head) or ("简历" in head) or ("我的" in head)
+        if positive and len(body_text.strip()) > 100:
             return True, "Boss 直聘已登录"
+
+        if len(body_text.strip()) > 100:
+            return False, (
+                "无法确认登录状态（页面已加载，但没看到登录入口也没看到用户信息）。\n"
+                "   如果是刚打开的页面，稍等几秒再试；已登录可忽略这一项继续。"
+            )
 
         return False, (
             "无法确认 Boss 直聘登录状态（页面内容过短）。\n"

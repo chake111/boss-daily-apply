@@ -16,6 +16,57 @@ metadata:
 > `$BOSS_WORKDIR` = 工作目录，默认 `~/WorkBuddy/BOSS/boss-data`，可用同名环境变量覆盖。
 > 所有状态文件都在工作目录，**不要在技能目录里写任何运行时文件**。
 
+## 首次使用（必须走向导，别让人手改 JSON）
+
+判断标准只有一条：`<工作目录>/user_profile.json` 里有没有 `role_summary`。
+没有就是首次使用，**先按下面四步走完，再谈投递**。
+
+### 第 1 步：在对话里把信息问清楚（由你问，不要让用户去改文件）
+
+一次问完，别一项一项挤牙膏：
+
+1. **目标城市**（如 深圳；决定搜哪个城市）
+2. **毕业年份**（如 2027；决定"只招 2026 届"这类要不要跳）
+3. **想投什么岗位**（一句话，如「Java 后端开发实习 / 前端开发实习」——这是 AI 判岗的核心依据）
+4. **简历文件在哪**（PNG/JPG 长图，或 PDF；没有就先跳过，但补发简历图会用）
+5. 可选：**实习月薪下限**（不知道就 0）
+
+拿到答案后跑向导，它会把信息写进档案、处理简历、按需装工具：
+
+```bash
+python "$SKILL_DIR/scripts/onboard.py" --yes \
+  --city 深圳 --year 2027 --direction "Java 后端开发实习" \
+  --resume "D:/我的简历.pdf"
+```
+
+### 第 2 步：装任何东西之前，先说清楚
+
+向导会自己征求同意，但**你在对话里也要先说一遍**，格式照这个来：
+
+> 要装 Playwright（Python 包，约 39MB，MIT 许可），用它驱动浏览器点投递。
+> 只装包，不下载浏览器内核——直接用你系统里的 Edge/Chrome。
+> 不想装也行，仓库自带内置方案，功能一样，只是点击稳定性略差。装吗？
+
+**红线**：没说清楚"装什么 / 多大 / 为什么 / 装到哪 / 怎么卸载"之前，不许执行 `pip install`。
+
+### 第 3 步：让他扫码登录一次
+
+```bash
+python "$SKILL_DIR/scripts/cdp_client.py" --serve        # 后台任务，保持运行
+```
+
+首次要在这个新窗口里扫码登录 BOSS直聘，登录态存在独立 profile 里，之后不用再登。
+
+### 第 4 步：验证
+
+```bash
+python "$SKILL_DIR/scripts/env_check.py"
+```
+
+三项全绿即可开工。有红的先按提示修，别硬上。
+
+---
+
 ## 三条不可违背的原则
 
 1. **一次只判一张卡**。`walk` 每次只给一张，禁止批量抓取整页再挑。判断与投递在同一个
@@ -31,10 +82,11 @@ metadata:
 - **任意 Chromium 系浏览器**：Chrome / Edge（Windows 自带）/ Brave / Vivaldi / Chromium / Opera。
   **不要求 Chrome**；Firefox / Safari 没有 CDP，也装不了扩展，是硬限制。
 - **自动化通道，二选一，都能全自动**：
-  - **CDP**（默认推荐）：浏览器自带的 DevTools 协议，`python scripts/cdp_client.py --launch`
-    起一个带调试端口的浏览器即可，**零扩展**。
-  - **WebBridge**：Kimi WebBridge 扩展 + 本地服务（端口 10086）。
-  - 两层都在 `webbridge_client` 里做了路由，上层脚本调用方式完全一致，不用改代码。
+  - **Playwright**（首选）：连到调试端口上的浏览器，点击/等待/上传都交给库，
+    `pip install playwright` 一行装完（约 39MB，**不下载浏览器内核**）。
+  - **内置 CDP**：不装任何东西也能跑，点击逻辑自己实现，页面改版时可能需要更新。
+  - **WebBridge**：已有 Kimi WebBridge 扩展的话，起服务即可，会被优先使用。
+  - 三者都在 `webbridge_client` 里做了路由，上层脚本调用方式完全一致。
 - Python 3.9+，只用标准库，无需 `pip install`。
 
 ### 环境不满足时（别卡在这里）
@@ -74,8 +126,10 @@ scripts/
   stats.py          回复率报表（Wilson 95% 区间）
   phase_stream.py   收尾生成 投递汇总.html
   ledger.py         无浏览器模式：手动记账（schema 与 driver 一致）
+  onboard.py        首次使用向导：问信息 / 问是否装工具 / 装 / 登录 / 写配置
+  playwright_backend.py  Playwright 后端（连调试端口，点击与上传交给库）
   browser.py        浏览器适配层（检测 / 启动，不限 Chrome）
-  cdp_client.py     CDP 后端：免扩展的自动化通道（标准库手写 WebSocket）
+  cdp_client.py     内置 CDP 后端 + 浏览器启动器（零安装兜底）
   install.py        装到各智能体，或输出纯文本用法
   paths.py          路径解析（工作目录 / 配置 / 简历图）
   bootstrap.py      首次安装：建目录、拷配置、检查简历图

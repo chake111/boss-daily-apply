@@ -99,7 +99,7 @@ def parse_salary_max(s):
 # ───────────────────────────────────────────────────────────
 
 _BACKEND = {"name": "", "at": 0.0}
-_BACKEND_OBJ = {"cdp": None}
+_BACKEND_OBJ = {"cdp": None, "playwright": None}
 
 
 def cdp_port():
@@ -114,23 +114,42 @@ def _cdp_ready():
         return False
 
 
-def backend(force=False):
-    """当前该用哪条通道：'webbridge' / 'cdp' / ''（都没有）。
+def _pw_ready():
+    """Playwright 装了没 + 端口通不通。装了就用它——库比手写协议可靠。"""
+    try:
+        from scripts import playwright_backend
+        return playwright_backend.available(cdp_port())
+    except Exception:
+        return False
 
-    BOSS_BACKEND 可强制指定；否则自动探测，WebBridge 优先（现成用户在用它），
-    没有扩展就退到 CDP。结果缓存 15 秒，避免每个动作都探一次端口。
+
+def backend(force=False):
+    """当前该用哪条通道：'webbridge' / 'playwright' / 'cdp' / ''（都没有）。
+
+    优先级：WebBridge（现成用户在用的扩展）→ Playwright（连同一个调试端口，
+    但点击/等待/上传都用库实现）→ 内置 CDP（既没装库时的兜底）。
+    BOSS_BACKEND 可强制指定，none/off 表示按"无通道"处理（自检和排障用）。
     """
     want = (os.environ.get("BOSS_BACKEND") or "").strip().lower()
     if want in ("none", "off"):
         return ""                     # 强制"无后端"，用于自检和排障
-    if want in ("webbridge", "cdp"):
+    if want in ("webbridge", "cdp", "playwright"):
         return want
     now = time.time()
     if not force and _BACKEND["name"] and now - _BACKEND["at"] < 15:
         return _BACKEND["name"]
-    name = "webbridge" if bridge_alive() else ("cdp" if _cdp_ready() else "")
+    if bridge_alive():
+        name = "webbridge"
+    elif _port_up():
+        name = "playwright" if _pw_ready() else "cdp"
+    else:
+        name = ""
     _BACKEND.update(name=name, at=now)
     return name
+
+
+def _port_up():
+    return _cdp_ready()
 
 
 def _cdp_backend():
@@ -140,15 +159,26 @@ def _cdp_backend():
     return _BACKEND_OBJ["cdp"]
 
 
+def _pw_backend():
+    from scripts import playwright_backend
+    if _BACKEND_OBJ["playwright"] is None:
+        _BACKEND_OBJ["playwright"] = playwright_backend.Backend(cdp_port())
+    return _BACKEND_OBJ["playwright"]
+
+
 def api(action, args=None, session=SESSION, host=DEFAULT_HOST, port=DEFAULT_PORT, timeout=DEFAULT_TIMEOUT):
     """发送动作请求，返回解析后的 dict。
 
-    有两条后端，调用方不需要知道用的是哪条：
-      · webbridge —— Kimi WebBridge 扩展 + 本地服务（端口 10086）
-      · cdp       —— 浏览器自带 DevTools 协议（免装扩展）
-    选择逻辑见 backend()；用 BOSS_BACKEND=webbridge|cdp 可强制指定。
+    有三条后端，调用方不需要知道用的是哪条：
+      · webbridge   —— Kimi WebBridge 扩展 + 本地服务（端口 10086）
+      · playwright  —— 连到调试端口上的浏览器，点击/等待/上传都交给库
+      · cdp         —— 内置的协议直连，既没装库也没扩展时的兜底
+    选择逻辑见 backend()；用 BOSS_BACKEND=webbridge|playwright|cdp 可强制指定。
     """
-    if backend() == "cdp":
+    be = backend()
+    if be == "playwright":
+        return _pw_backend().api(action, args or {}, session, timeout=timeout)
+    if be == "cdp":
         return _cdp_backend().api(action, args or {}, session, timeout=timeout)
 
     if args is None:
@@ -809,7 +839,8 @@ def require_bridge(host=DEFAULT_HOST, port=DEFAULT_PORT):
     为什么不在 api() 里抛异常：上层脚本太多，每个都要包一层 try；
     统一在这里挡住，输出比 ConnectionRefusedError 的堆栈有用得多。
     """
-    if backend() and (bridge_alive(host, port) or _cdp_ready()):
+    # backend() 返回空表示"按无通道处理"（BOSS_BACKEND=none），此时不该放行
+    if backend() and (bridge_alive(host, port) or _port_up()):
         return True
     exe = os.path.normpath(os.path.expanduser(
         os.path.join("~", ".kimi-webbridge", "bin", "kimi-webbridge.exe")))

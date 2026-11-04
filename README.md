@@ -62,23 +62,51 @@ python scripts/cdp_client.py --launch  # 带调试端口起一个，免扩展
 ```bash
 git clone https://github.com/chake111/boss-daily-apply.git
 cd boss-daily-apply
-python scripts/selftest.py                    # 27 项自检，含一次真浏览器点击（--no-browser 跳过）
+
+python scripts/onboard.py          # ← 向导：问信息 → 问装不装 → 装 → 扫码登录 → 写配置
+```
+
+就这一条。向导会：
+
+1. 问你要投哪个城市、哪一届、什么方向、简历在哪
+2. **告诉你它打算装什么、多大、为什么，等你点头才装**（不想装也能用，仓库自带零安装方案）
+3. 把 PDF 简历转成图（需要时问你）
+4. 起浏览器、等你扫码登录一次
+5. 把配置写好，打印"以后每天只做两件事"
+
+想先看看它要干什么，不改任何东西：
+
+```bash
+python scripts/onboard.py --check
+```
+
+<details>
+<summary>不想用向导 / 给智能体自动跑</summary>
+
+```bash
+python scripts/selftest.py                    # 28 项自检，含一次真浏览器点击（--no-browser 跳过）
 python scripts/install.py --list              # 你的智能体该装哪
 python scripts/install.py --target claude     # 或 workbuddy / cursor / codex / plain
-python scripts/bootstrap.py                   # 建工作目录、拷配置、建 resume 目录
-python scripts/cdp_client.py --serve          # 起浏览器（免扩展），首次扫码登录一次；
-                                              # 智能体里请丢到后台任务，否则进程树会被回收
+python scripts/bootstrap.py                   # 只建目录和配置，不装任何东西
+python scripts/onboard.py --yes --city 深圳 --year 2027 \
+    --direction "Java 后端开发实习" --resume "D:/简历.pdf"
+python scripts/cdp_client.py --serve          # 起浏览器（后台任务，保持运行）
 python scripts/env_check.py                   # 浏览器 / 通道 / 登录态 三条自检
 ```
 
-装好后改两个文件（默认工作目录 `~/.boss-daily-apply`，从旧版本升级会自动沿用旧目录）：
+</details>
+
+> **装了 Playwright 就用 Playwright**（点击、等待、上传都交给成熟库），
+> 没装就自动退回仓库内置的协议直连——两条都能跑完整流程，不会因为少装一个包卡住。
+
+向导已经把这些写好了。之后想细调（换城市、换话术）再改这两个文件：
 
 | 文件 | 改什么 |
 |---|---|
 | `<工作目录>/user_profile.json` | 城市+city_code、届别、技术栈、`role_summary`、`own_greeting_prefix` |
 | `<工作目录>/config/greetings.json` | 四个方向各一句 40 字内的话术 |
 
-把简历长图放到 `<工作目录>/resume/resume.png`，然后：
+然后：
 
 ```bash
 python scripts/supply_probe.py --rounds 20        # 探供给，出配额
@@ -124,8 +152,10 @@ scripts/
   stats.py          回复率报表（Wilson 95% 区间）
   phase_stream.py   收尾生成 投递汇总.html
   ledger.py         无浏览器模式：手动记账，报表口径不受影响
+  onboard.py        首次使用向导（问信息 / 问是否装工具 / 装 / 登录 / 写配置）
+  playwright_backend.py  Playwright 后端：点击与上传交给成熟库
   browser.py        浏览器适配层（检测 / 启动，不限 Chrome）
-  cdp_client.py     CDP 后端：免扩展的自动化通道（手写 WebSocket，零依赖）
+  cdp_client.py     内置 CDP 后端 + 浏览器启动器（零安装兜底）
   install.py        装到 workbuddy / claude / cursor / codex，或纯文本用法
   paths.py          路径解析（代码与状态分离）
   bootstrap.py      首次安装：建目录、拷配置、检查简历图
