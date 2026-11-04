@@ -1,14 +1,15 @@
 # -*- coding: utf-8 -*-
-"""离线自检：不碰浏览器、不碰真实台账，验证机械层没坏。
+"""自检：不碰真实台账，验证机械层没坏（默认含一次 headless 浏览器点击）。
 
 用法：
     python scripts/selftest.py            # 全部跑一遍
     python scripts/selftest.py -v         # 打印每条命令的输出
 
-它会在临时目录里造一份工作目录 + 假数据，然后逐条跑 CLI 并断言结果。
+它会在临时目录里造一份工作目录 + 假数据，然后逐条跑 CLI 并断言结果；
+最后一节会真起一个 headless 浏览器，验证"免扩展自动点"这条链路（--no-browser 可跳过）。
 适合改完代码、改完配置、以及别人 clone 下来先确认"装对了"。
 
-**不需要 WebBridge，也不会写你的真实工作目录。**
+**不需要 WebBridge，也不会写你的真实工作目录；浏览器用临时 profile、跑完自己退出。**
 """
 import json
 import os
@@ -178,6 +179,12 @@ def main():
         check("安装器支持 cursor 规则（dry-run）", lambda: _expect(
             run(["scripts/install.py", "--target", "cursor", "--project", wd, "--dry-run"], wd),
             ".cursor"))
+
+        if "--no-browser" not in sys.argv:
+            print("\n[9] CDP 后端：免扩展也能自动点（真起一个 headless 浏览器）")
+            check("CDP 启动 + 传输层路由 + 点击", lambda: _cdp_roundtrip(wd))
+        else:
+            print("\n[9] CDP 后端：已跳过（--no-browser）")
     finally:
         shutil.rmtree(wd, ignore_errors=True)
 
@@ -205,6 +212,48 @@ def _not_expect(text, needle):
 def _exists(path):
     if not os.path.exists(path):
         raise AssertionError("文件不存在: " + path)
+
+
+def _cdp_roundtrip(wd):
+    """真起一个 headless 浏览器，验证"免扩展自动化"这条链路。
+
+    走的是上层脚本用的同一套接口（webbridge_client.evaluate/navigate/click），
+    所以它通过 == 换后端不会破坏投递流程。
+    """
+    import importlib
+    if ROOT not in sys.path:
+        sys.path.insert(0, ROOT)
+    import scripts.cdp_client as cdp
+    import scripts.webbridge_client as W
+
+    os.environ["BOSS_CDP_PROFILE"] = os.path.join(wd, "cdp-profile")
+    port = 9471
+    ok, msg = cdp.launch(port=port, headless=True, wait=25)
+    if not ok:
+        raise AssertionError("起不来（没浏览器？）：" + msg)
+    try:
+        os.environ["BOSS_CDP_PORT"] = str(port)
+        os.environ["BOSS_BACKEND"] = "cdp"
+
+        if W.evaluate("1+1") != 2:
+            raise AssertionError("evaluate 没返回 2")
+
+        page = os.path.join(wd, "cdp.html")
+        with open(page, "w", encoding="utf-8") as f:
+            f.write("<title>cdp-test</title>"
+                    "<button id='b' onclick='window.c=(window.c||0)+1'>go</button>")
+        W.navigate("file:///" + page.replace("\\", "/"))
+        if W.evaluate("document.title") != "cdp-test":
+            raise AssertionError("navigate 后标题不对")
+
+        if not W.click("#b"):
+            raise AssertionError("click 返回 False")
+        if W.evaluate("window.c || 0") != 1:
+            raise AssertionError("点击没有触发 onclick")
+    finally:
+        cdp.close_browser(port)
+        os.environ.pop("BOSS_BACKEND", None)
+        os.environ.pop("BOSS_CDP_PORT", None)
 
 
 def _json_has(text, key):

@@ -22,6 +22,7 @@ Linux 用 xdg-open 交给桌面环境——都是同一个思路：**别自己 f
     python scripts/browser.py --list            # 装了哪些、在不在跑
     python scripts/browser.py --launch          # 用第一个可用的拉起来
     python scripts/browser.py --launch edge     # 指定 Edge
+    python scripts/browser.py --cdp             # 带调试端口起，供免扩展自动化用
     python scripts/browser.py --json            # 给智能体解析
 """
 import json
@@ -226,6 +227,29 @@ def resolve(prefer=""):
 def main():
     args = sys.argv[1:]
     prefer = ""
+
+    if "--help" in args or "-h" in args:
+        print(__doc__.strip())
+        return 0
+
+    # --cdp：带调试端口启动，供"免扩展"的自动化通道使用
+    if "--cdp" in args:
+        from scripts import cdp_client
+        i = args.index("--cdp")
+        browser = args[i + 1] if len(args) > i + 1 and not args[i + 1].startswith("-") else ""
+        path = ""
+        if browser:
+            b = pick(browser)
+            if not b:
+                print("没找到浏览器:", browser)
+                return 3
+            path = b["path"]
+        ok, msg = cdp_client.launch(port=cdp_client.DEFAULT_PORT,
+                                    browser_path=path or None,
+                                    headless="--headless" in args)
+        print(("✓ " if ok else "✗ ") + msg)
+        return 0 if ok else 1
+
     if "--launch" in args:
         i = args.index("--launch")
         prefer = args[i + 1] if len(args) > i + 1 and not args[i + 1].startswith("-") else ""

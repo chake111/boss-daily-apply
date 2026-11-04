@@ -60,27 +60,22 @@ $DRV reject <jobId>        # 判否留痕
 
 能自己修的一律自己修，别回来汇报修了什么。只有第 4 小节列的几种情况才允许停下来问人。
 
-### 1) 探服务
+### 1) 探自动化通道
+
+两条都能全自动，任选其一。**没有扩展就用 CDP**，别以为必须装扩展：
 
 ```bash
-curl -s --noproxy '*' http://127.0.0.1:10086/status
+python "$SKILL_DIR/scripts/cdp_client.py" --check     # CDP 就绪？
+python "$SKILL_DIR/scripts/cdp_client.py" --launch    # 没就绪就起一个（首次扫码登录一次）
 ```
 
-连不上 → 起服务（后台任务）：
-
 ```bash
+curl -s --noproxy '*' http://127.0.0.1:10086/status  # 有 WebBridge 扩展就顺手看一眼
 "$HOME/.kimi-webbridge/bin/kimi-webbridge.exe" start --foreground
 ```
 
-等 5 秒重探。还连不上 → 用全路径跑诊断（`kimi-webbridge` 不在 PATH 里，
-直接敲命令会 `command not found`，别把它当成"服务挂了"）：
-
-```bash
-"$HOME/.kimi-webbridge/bin/kimi-webbridge.exe" status
-netstat -ano | findstr 10086
-```
-
-清残留 pid（`~/.kimi-webbridge/daemon.pid`）后重起。
+`webbridge_client` 会自动选通道（WebBridge 优先，否则 CDP），上层命令完全一致。
+用 `BOSS_BACKEND=cdp|webbridge` 可强制指定。
 
 ### 2) 看浏览器
 
@@ -107,15 +102,17 @@ Windows 上卸干净可用 `taskkill //IM chrome.exe`（不带 `/F`），Edge �
 
 ### 3) 等 12 秒再判
 
-首次探测常为 false。`/status` 里 `extension_connected` **连续 3 次为 true** 才开工。
-中途掉线（`extension_not_connected`）→ 等 10 秒重探，不行重启浏览器，属"能自己修"。
+- **CDP 通道**：`cdp_client.py --check` 能列出标签页就算就绪（启动后端口需要几秒才监听）。
+- **WebBridge 通道**：首次探测常为 false，`/status` 里 `extension_connected`
+  **连续 3 次为 true** 才开工；中途掉线（`extension_not_connected`）等 10 秒重探，
+  不行重启浏览器，属"能自己修"。
 
 ### 4) 只有这些才找人（都涉及下载/安装/人肉操作）
 
-- `kimi-webbridge.exe` 不存在，或 `status` 报版本不匹配需要 `upgrade`
-- 扩展没装 / 被禁用 / 被判崩溃停用
-- **没有任何 Chromium 系浏览器**（此时转 `ledger.py` 半自动模式，也别硬装）
-- BOSS 登录态失效要扫码
+- **两条通道都起不来**（`cdp_client --launch` 失败 且 WebBridge 服务不可用）
+- **没有任何 Chromium 系浏览器**（此时转 `ledger.py`，别硬装）
+- 浏览器不支持 `--remote-debugging-port`（版本太旧），且扩展也装不上
+- 登录态失效要扫码（这个必须人来）
 - 出现验证码、滑块、人脸核验
 - 上面 1~3 步各试两轮仍然起不来
 

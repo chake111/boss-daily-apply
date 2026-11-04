@@ -1,6 +1,6 @@
 ---
 name: boss-daily-apply
-description: "BOSS直聘每日批量投递 runbook：探供给→按证据强度配比→逐张走卡读 JD→AI 语义终审→当场投递→分批补发简历图与按方向话术→收尾出汇总页与回复台账。含 jobType=1902 实习通道、分页绕懒加载、机械否决库、Wilson 区间回复率报表。当用户说『投递』『今天投 N 份』『继续投』『BOSS 投简历』『看看回复』，或要在 BOSS直聘 上按城市/方向/届别批量投实习岗时使用。依赖 Kimi WebBridge（127.0.0.1:10086）驱动已登录的 Chromium 系浏览器（Chrome/Edge/Brave 均可，不要求 Chrome），不可用 CDP 或内置浏览器替代；没有浏览器扩展时可用 ledger.py 半自动记账。Daily BOSS Zhipin job-application runbook — supply probing, evidence-weighted allocation, one-card-at-a-time JD review, semantic gating, on-the-spot apply, staged resume-image follow-ups, and a Wilson-interval reply report."
+description: "BOSS直聘每日批量投递 runbook：探供给→按证据强度配比→逐张走卡读 JD→AI 语义终审→当场投递→分批补发简历图与按方向话术→收尾出汇总页与回复台账。含 jobType=1902 实习通道、分页绕懒加载、机械否决库、Wilson 区间回复率报表。当用户说『投递』『今天投 N 份』『继续投』『BOSS 投简历』『看看回复』，或要在 BOSS直聘 上按城市/方向/届别批量投实习岗时使用。通过 CDP（浏览器自带调试协议，免装扩展）或 Kimi WebBridge 扩展驱动已登录的 Chromium 系浏览器（Chrome/Edge/Brave 均可，不要求 Chrome）；都没有时可用 ledger.py 手动记账。Daily BOSS Zhipin job-application runbook — supply probing, evidence-weighted allocation, one-card-at-a-time JD review, semantic gating, on-the-spot apply, staged resume-image follow-ups, and a Wilson-interval reply report."
 version: 3.0.0
 agent_created: true
 metadata:
@@ -29,20 +29,22 @@ metadata:
 ## 前置依赖
 
 - **任意 Chromium 系浏览器**：Chrome / Edge（Windows 自带）/ Brave / Vivaldi / Chromium / Opera。
-  **不要求 Chrome**；Firefox / Safari 装不了 WebBridge 扩展，是硬限制。
-- **Kimi WebBridge**，本地端口 `10086`，控制一台**已登录 BOSS直聘**的浏览器。
-  **不可**用 CDP 直连 / 内置浏览器接管——会丢登录态。桥连不上就修桥，别换工具。
+  **不要求 Chrome**；Firefox / Safari 没有 CDP，也装不了扩展，是硬限制。
+- **自动化通道，二选一，都能全自动**：
+  - **CDP**（默认推荐）：浏览器自带的 DevTools 协议，`python scripts/cdp_client.py --launch`
+    起一个带调试端口的浏览器即可，**零扩展**。
+  - **WebBridge**：Kimi WebBridge 扩展 + 本地服务（端口 10086）。
+  - 两层都在 `webbridge_client` 里做了路由，上层脚本调用方式完全一致，不用改代码。
 - Python 3.9+，只用标准库，无需 `pip install`。
 
 ### 环境不满足时（别卡在这里）
 
-这个 skill 的价值一半在判断表，一半在自动化。**没有桥也能用后半段**：
-
-| 情况 | 降级方案 |
+| 情况 | 处置 |
 |---|---|
-| 装不了扩展（公司电脑 / 权限受限） | `python scripts/ledger.py add ...` 手动记账；`stats.py` 照常出报表 |
+| 没装扩展 | **不是问题**：走 CDP，`cdp_client.py --launch`，照样自动点 |
+| 只有 Edge | 同上，Edge 一样支持 CDP |
+| 装不了任何 Chromium 浏览器 | 转 `python scripts/ledger.py` 手动记账；判断与报表照用 |
 | 只有终端、没有智能体 | 直接跑脚本；JD 判定照 `references/judgment.md` 自己做 |
-| 浏览器 / 平台不支持 WebBridge | 同上，全流程转半自动 |
 
 `ledger.py` 写的是和 driver **完全相同**的 schema，所以指标、报表、去重规则全部沿用。
 完整的环境矩阵见 `references/portability.md`。
@@ -52,7 +54,8 @@ metadata:
 ```bash
 python "$SKILL_DIR/scripts/install.py" --list     # 你的智能体该装哪（workbuddy/claude/cursor/codex）
 python "$SKILL_DIR/scripts/bootstrap.py"          # 建工作目录 + 拷配置 + 建 resume 目录
-python "$SKILL_DIR/scripts/env_check.py"          # 浏览器 / WebBridge / 登录态自检
+python "$SKILL_DIR/scripts/cdp_client.py" --launch  # 起带调试端口的浏览器（首次扫码登录）
+python "$SKILL_DIR/scripts/env_check.py"          # 浏览器 / 通道 / 登录态自检
 python "$SKILL_DIR/scripts/browser.py" --list     # 装了哪些浏览器、在不在跑
 ```
 
@@ -72,13 +75,14 @@ scripts/
   phase_stream.py   收尾生成 投递汇总.html
   ledger.py         无浏览器模式：手动记账（schema 与 driver 一致）
   browser.py        浏览器适配层（检测 / 启动，不限 Chrome）
+  cdp_client.py     CDP 后端：免扩展的自动化通道（标准库手写 WebSocket）
   install.py        装到各智能体，或输出纯文本用法
   paths.py          路径解析（工作目录 / 配置 / 简历图）
   bootstrap.py      首次安装：建目录、拷配置、检查简历图
-  selftest.py       离线自检（不碰浏览器、不碰真实台账）—— 改完代码先跑它
+  selftest.py       自检 27 项（含 headless 点击）—— 改完代码先跑它
 references/
   runbook.md        11 步完整执行细节 —— 遇到分支先查这里
-  pitfalls.md       22 条踩坑，照做即可
+  pitfalls.md       24 条踩坑，照做即可
   metrics.md        回复率口径与 A/B 纪律
   judgment.md       判定标准 + 边界案例表
   portability.md    环境适配：没有 Chrome / 不用 WorkBuddy 怎么办
@@ -113,30 +117,34 @@ python "$SKILL_DIR/scripts/ledger.py" status
 
 ### Step 1 · 环境自检（能自己修的一律自己修）
 
-先看浏览器在不在（**不要求 Chrome**，Edge / Brave / Vivaldi 都行）：
+先确认自动化通道。**没有扩展不是问题**，CDP 这条路一样能自动点：
 
 ```bash
-python "$SKILL_DIR/scripts/browser.py" --list     # 装了哪些、在不在跑
-python "$SKILL_DIR/scripts/browser.py" --launch   # 默认挑"正在运行"的那个
+python "$SKILL_DIR/scripts/cdp_client.py" --check    # 有调试端口就绪就直接开工
+python "$SKILL_DIR/scripts/cdp_client.py" --launch   # 没就绪就起一个（首次扫码登录一次）
 ```
 
-再探桥：
+有 WebBridge 扩展的，起一下服务即可，脚本会自动优先用它：
 
 ```bash
 curl -s --noproxy '*' http://127.0.0.1:10086/status
+"$HOME/.kimi-webbridge/bin/kimi-webbridge.exe" start --foreground
 ```
 
-连不上就起服务（后台任务）：`"$HOME/.kimi-webbridge/bin/kimi-webbridge.exe" start --foreground`，
-等 5 秒重探。启动浏览器**必须走 `browser.py`**（它用 `explorer.exe` / `open -a` / `xdg-open`）——
-自己 `Start-Process` / `cmd start` 拉起的会在 1~2 分钟内被会话回收，扩展跟着掉线。
+浏览器本身也可以先看一眼（**不要求 Chrome**，Edge / Brave / Vivaldi 都行）：
 
-`extension_connected` 连续 3 次为 true 才开工。只有这些才找人：WebBridge 缺文件/版本不匹配、
-扩展被禁用、没有可用的 Chromium 浏览器、登录态要扫码、出现验证码/滑块/人脸、
-上述步骤各试两轮仍不通。
+```bash
+python "$SKILL_DIR/scripts/browser.py" --list
+```
 
-> 桥或扩展怎么都装不上（公司电脑、Firefox、无权限）→ **不要卡在环境上**。
-> 转 `python scripts/ledger.py` 半自动模式：你在浏览器里自己投，脚本负责记账、去重和报表。
-> 判断标准、指标口径、A/B 纪律全都照用，功能只少"自动点击"这一块。
+`env_check.py` 里「自动化通道」「登录态」都绿了才开工。只有这些才找人：两条通道都起不来、
+没有任何 Chromium 浏览器、登录态要扫码、出现验证码/滑块/人脸、各试两轮仍不通。
+
+> **别再自己 spawn 浏览器**：Windows 上 `Start-Process` / `cmd start` 拉起的会在 1~2 分钟内
+> 被会话回收，调试端口和扩展一起掉。统一用 `browser.py` / `cdp_client.py`。
+
+> 连 Chromium 浏览器都没有（只能用 Firefox/Safari）→ 转 `python scripts/ledger.py`：
+> 你在浏览器里自己投，脚本负责记账、去重和报表。判断标准与指标口径照用。
 
 ### Step 2 · 判 `document.hidden`（决定 A 路还是 B 路）
 

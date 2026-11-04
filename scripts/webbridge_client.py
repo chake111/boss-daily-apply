@@ -94,8 +94,61 @@ def parse_salary_max(s):
 # 模块级 API 函数（自带重试）
 # ═══════════════════════════════════════════════════════════
 
+# ───────────────────────────────────────────────────────────
+# 后端选择：WebBridge（扩展）或 CDP（免扩展）
+# ───────────────────────────────────────────────────────────
+
+_BACKEND = {"name": "", "at": 0.0}
+_BACKEND_OBJ = {"cdp": None}
+
+
+def cdp_port():
+    return int(os.environ.get("BOSS_CDP_PORT") or 9222)
+
+
+def _cdp_ready():
+    try:
+        from scripts import cdp_client
+        return cdp_client.available(cdp_port())
+    except Exception:
+        return False
+
+
+def backend(force=False):
+    """当前该用哪条通道：'webbridge' / 'cdp' / ''（都没有）。
+
+    BOSS_BACKEND 可强制指定；否则自动探测，WebBridge 优先（现成用户在用它），
+    没有扩展就退到 CDP。结果缓存 15 秒，避免每个动作都探一次端口。
+    """
+    want = (os.environ.get("BOSS_BACKEND") or "").strip().lower()
+    if want in ("webbridge", "cdp"):
+        return want
+    now = time.time()
+    if not force and _BACKEND["name"] and now - _BACKEND["at"] < 15:
+        return _BACKEND["name"]
+    name = "webbridge" if bridge_alive() else ("cdp" if _cdp_ready() else "")
+    _BACKEND.update(name=name, at=now)
+    return name
+
+
+def _cdp_backend():
+    from scripts import cdp_client
+    if _BACKEND_OBJ["cdp"] is None:
+        _BACKEND_OBJ["cdp"] = cdp_client.Backend(cdp_port())
+    return _BACKEND_OBJ["cdp"]
+
+
 def api(action, args=None, session=SESSION, host=DEFAULT_HOST, port=DEFAULT_PORT, timeout=DEFAULT_TIMEOUT):
-    """发送 WebBridge API 请求，返回解析后的 dict。自带 MAX_RETRIES 次重试。"""
+    """发送动作请求，返回解析后的 dict。
+
+    有两条后端，调用方不需要知道用的是哪条：
+      · webbridge —— Kimi WebBridge 扩展 + 本地服务（端口 10086）
+      · cdp       —— 浏览器自带 DevTools 协议（免装扩展）
+    选择逻辑见 backend()；用 BOSS_BACKEND=webbridge|cdp 可强制指定。
+    """
+    if backend() == "cdp":
+        return _cdp_backend().api(action, args or {}, session, timeout=timeout)
+
     if args is None:
         args = {}
     last_error = None
@@ -724,35 +777,37 @@ def bridge_alive(host=DEFAULT_HOST, port=DEFAULT_PORT, timeout=2.0):
 
 
 _BRIDGE_HINT = """\
-✗ 连不上 Kimi WebBridge（{host}:{port}）—— 不是脚本坏了，是桥没起来。
+✗ 两条自动化通道都没通 —— 不是脚本坏了，是浏览器还没接管。
 
-按顺序试：
-  1) 先看浏览器在不在（Chrome / Edge / Brave / Vivaldi 都行，不限于 Chrome）：
-     python scripts/browser.py --list
-     python scripts/browser.py --launch        # 默认挑正在运行的那个
-  2) 起服务（后台任务）：
-     "{exe}" start --foreground
-     等 5 秒再探。
-  3) 用全路径看状态（kimi-webbridge 不在 PATH 里，直接敲命令会 command not found，
-     别把它当成"服务挂了"）：
-     "{exe}" status
-     netstat -ano | findstr {port}
-  4) 还不行就清残留 pid 后重起：~/.kimi-webbridge/daemon.pid
-  5) 确认扩展装在**正在运行的那个浏览器**里、且已登录 BOSS直聘。
-     扩展断开就正常关掉浏览器（不要强杀）再拉一次。
+【A · 免扩展，推荐】用浏览器自带的 DevTools 协议（CDP）
+   python scripts/cdp_client.py --launch
+   它用独立 profile 起一个带调试端口的浏览器，第一次在里面扫码登录 BOSS 直聘，
+   之后登录态一直有效。全程不需要装任何扩展。
+   已经在跑了就想确认一下：python scripts/cdp_client.py --check
 
-这些都试过两轮仍不通，说明这台机器不适合自动化 —— 改用无浏览器模式：
-     python scripts/ledger.py --help       # 手动投，脚本负责记账和统计
+【B · WebBridge 扩展】已有扩展的话，把服务拉起来
+   1) 看浏览器在不在（Chrome / Edge / Brave / Vivaldi 都行，不限于 Chrome）：
+      python scripts/browser.py --list
+   2) 起服务（后台任务）："{exe}" start --foreground
+   3) 用全路径看状态（它不在 PATH 里，直接敲命令会 command not found）：
+      "{exe}" status
+      netstat -ano | findstr {port}
+
+【C · 两条都走不通】至少还能记账：
+   python scripts/ledger.py --help       # 手动投，脚本负责去重、统计、报表
+
+注意：A 和 B 都不需要 CDP 之外的东西，也不要把浏览器换成 Firefox/Safari ——
+它们没有 Chromium 的调试协议，装不了扩展也连不上 CDP。
 """
 
 
 def require_bridge(host=DEFAULT_HOST, port=DEFAULT_PORT):
-    """开工前短路：桥不可达就打印修复指引并退出（退出码 2）。
+    """开工前短路：两条后端都不通就打印修复指引并退出（退出码 2）。
 
     为什么不在 api() 里抛异常：上层脚本太多，每个都要包一层 try；
     统一在这里挡住，输出比 ConnectionRefusedError 的堆栈有用得多。
     """
-    if bridge_alive(host, port):
+    if bridge_alive(host, port) or _cdp_ready():
         return True
     exe = os.path.normpath(os.path.expanduser(
         os.path.join("~", ".kimi-webbridge", "bin", "kimi-webbridge.exe")))

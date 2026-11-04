@@ -75,8 +75,8 @@ def _check_browser():
     running = [b for b in found if _browser.is_running(b) is True]
     names = "、".join(b["name"] for b in found)
     if running:
-        return True, f"{names}（运行中：{running[0]['name']}，扩展应装在这个上）"
-    return True, f"{names}（都没在运行；开工前先启动其中一个）"
+        return True, "%s（运行中：%s）" % (names, running[0]["name"])
+    return True, "%s（都没在运行；开工前先启动其中一个）" % names
 
 
 # ── WebBridge 检测 ─────────────────────────────────
@@ -111,13 +111,13 @@ def _check_webbridge():
 # ── Boss 登录检测 ──────────────────────────────────
 def _check_boss_login():
     """
-    通过 WebBridge evaluate 检测 Boss 直聘登录态。
+    通过当前后端（WebBridge 或 CDP）读取页面，检测 Boss 直聘登录态。
     不绑定任何特定用户名——通用检测：
       - 页面非登录墙（不含"请登录"/"立即登录"等）
       - 页面含已登录标志（导航栏有用户信息 / body 含正常推荐内容）
     """
     try:
-        # 延迟导入，避免无 WebBridge 时 import 失败
+        # 延迟导入，避免通道不可用时 import 失败
         from scripts.webbridge_client import api, evaluate as _ev
         import time as _t
 
@@ -137,7 +137,7 @@ def _check_boss_login():
             if kw in body_text and body_text.index(kw) < 200:
                 return False, (
                     "Boss 直聘未登录或登录态已过期。\n"
-                    "   请在 Chrome 中打开 https://www.zhipin.com 并完成登录，\n"
+                    "   请在浏览器中打开 https://www.zhipin.com 并完成登录，\n"
                     "   本流程需复用您的登录数据才能投递。"
                 )
 
@@ -147,10 +147,46 @@ def _check_boss_login():
 
         return False, (
             "无法确认 Boss 直聘登录状态（页面内容过短）。\n"
-            "   请在 Chrome 中打开 https://www.zhipin.com 确认已登录。"
+            "   请在浏览器中打开 https://www.zhipin.com 确认已登录。"
         )
     except Exception as e:
-        return False, f"无法连接 WebBridge 检测登录态: {e}（请先确保 WebBridge 已启动）"
+        return False, f"无法检测登录态: {e}（先让自动化通道就绪：python scripts/cdp_client.py --launch）"
+
+
+# ── 自动化通道 ─────────────────────────────────────
+def _kimi_exe():
+    return os.path.normpath(os.path.expanduser(
+        os.path.join("~", ".kimi-webbridge", "bin", "kimi-webbridge.exe")))
+
+
+def _check_channel():
+    """自动化通道：优先 WebBridge 扩展，没有扩展就看 CDP（免扩展）。
+
+    CDP 不是"降级方案"：evaluate / click / navigate / 开新标签它都有，
+    同样能跑完整条投递流程，只是不需要装任何扩展。
+    """
+    try:
+        from scripts.webbridge_client import bridge_alive, cdp_port
+        from scripts import cdp_client
+    except Exception as e:
+        return False, f"通道检测失败: {e}"
+
+    if bridge_alive():
+        return True, "Kimi WebBridge 在线（端口 10086）"
+
+    port = cdp_port()
+    v = cdp_client.version(port, timeout=2)
+    if v:
+        return True, "CDP 就绪（调试端口 %d，%s，无需扩展）" % (
+            port, v.get("Browser", "Chromium"))
+
+    return False, (
+        "两条通道都没通，任选一条：\n"
+        "     A) 免扩展（推荐）：python scripts/cdp_client.py --launch\n"
+        "        用独立 profile 起浏览器，第一次在里面扫码登录一次，之后登录态常驻\n"
+        "     B) 扩展：https://www.kimi.com/zh-cn/features/webbridge\n"
+        "        装好后运行 \"%s\" start --foreground" % _kimi_exe()
+    )
 
 
 # ── 主入口 ─────────────────────────────────────────
@@ -166,14 +202,14 @@ def check_env(verbose=True):
     passed, detail = _check_browser()
     result.add("浏览器", passed, detail)
 
-    # ② WebBridge
-    passed, detail = _check_webbridge()
-    result.add("Kimi WebBridge", passed, detail)
+    # ② 自动化通道：WebBridge 扩展，或 CDP（免扩展）
+    passed, detail = _check_channel()
+    result.add("自动化通道", passed, detail)
 
-    # 仅当前两项都通过时才检测登录（需要 WebBridge 才能读页面）
-    if result.ok or any(n == "Kimi WebBridge" and p for n, p, _ in result.items):
-        passed, detail = _check_boss_login()
-        result.add("Boss 直聘登录", passed, detail)
+    # 仅当通道就绪时才检测登录（需要能读页面）
+    if passed:
+        passed2, detail2 = _check_boss_login()
+        result.add("Boss 直聘登录", passed2, detail2)
 
     result.build_message()
     if verbose:

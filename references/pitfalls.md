@@ -1,4 +1,4 @@
-# 踩坑全记录（22 条）
+# 踩坑全记录（24 条）
 
 > 每条都来自实际失败与排查。按「现象 → 根因 → 处置」写，照做即可，不用重新发明一遍。
 > 如果你在这些坑里又踩了一次，说明流程里少了一道校验——补在 `scripts/` 里，别只记在脑子里。
@@ -194,6 +194,35 @@ BOSS 的懒加载直接停住。这不是"走空"，是"没加载"。
 
 **处置**：新卡一律从 1902 通道拿。推荐页只在首轮 `recommend_exhausted=false` 时走一次。
 
+### 23. CDP 端口起不来
+
+**现象**：`cdp_client.py --launch` 执行了，但 12 秒内 `--check` 一直报端口没有 CDP 服务。
+
+**根因**：三种。
+1. **同一个 profile 已经有浏览器实例在跑** —— 新进程只会把命令行交给已有实例然后退出，
+   调试端口根本没监听（最常见）。
+2. 浏览器版本太旧，不支持 `--remote-debugging-port`。
+3. 子进程没有脱离当前控制台，宿主会话结束时被一起回收。
+
+**处置**：
+
+- 用默认的独立 profile（`<工作目录>/browser-profile`），不要指向日常 profile；
+  真要指向，先关掉所有浏览器窗口。
+- 版本确认：`chrome://version` 里看内核，Chromium 100+ 都支持。
+- `cdp_client.launch()` 在 Windows 上已经用 `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`，
+  不要改回 `Start-Process`。
+- 还是不行就把 `--launch` 打印出的那条完整命令手动粘到终端跑一次，成功后再 `--check`。
+
+### 24. CDP 连上了但 `evaluate` 报错 / 拿到空值
+
+**现象**：端口通了，`list_tabs` 也返回了标签，但第一个目标 `evaluate` 直接失败。
+
+**根因**：连到了浏览器自己的内部页（`edge://sync-confirmation-dialog`、
+`chrome://newtab` 这类），这些页面没有可执行的 DOM 上下文。
+
+**处置**：`cdp_client.page_target()` 已默认跳过 `chrome://` / `edge://` / `devtools://` /
+`about:blank`，优先挑真实网页。自己写脚本时也别硬用 `/json/list` 的第一条。
+
 ---
 
 ## 一句话总结
@@ -220,3 +249,5 @@ BOSS 的懒加载直接停住。这不是"走空"，是"没加载"。
 20. `SKIP 标题不符` 等 20 秒。
 21. `PYTHONPATH` 必须带。
 22. 推荐页不产新卡，去 1902。
+23. CDP 端口起不来 → 多半是同一 profile 已有实例在跑，用独立 profile。
+24. CDP 连上却 evaluate 失败 → 连到了浏览器内部页，跳过 `chrome://` / `edge://`。

@@ -13,21 +13,24 @@
 
 ## 先看这里：你需要什么
 
-| 你的情况 | 能用到什么 | 怎么做 |
-|---|---|---|
-| Chromium 浏览器（**不必是 Chrome**）+ WebBridge 扩展 + 任意智能体 | 全自动 | 正常装，见下方快速开始 |
-| 浏览器有，但装不了扩展（公司电脑、权限受限） | 判定 + 记账 + 统计 | `python scripts/ledger.py`，自己点投递 |
-| 只有终端，没有智能体 | 脚本 + 手册 | 直接跑脚本，判断照 `judgment.md` 自己做 |
-| 只是想先看看 | 一份可执行手册 | 读 `SKILL.md` + `references/` |
+**两条自动化通道，都能自动翻页、自动点投递、自动补发简历图：**
 
-**没有 Chrome 不是问题**：Edge（Windows 自带）、Brave、Vivaldi、Chromium 都能装 WebBridge 扩展。
-Firefox / Safari 装不了，那是硬限制。
+| 你的情况 | 走哪条 | 怎么做 |
+|---|---|---|
+| 有任意 Chromium 浏览器（Edge 就算），不想装扩展 | **CDP**（推荐） | `python scripts/cdp_client.py --launch`，首次扫码登录一次 |
+| 已经装了 Kimi WebBridge 扩展 | **WebBridge** | 起服务即可，脚本自动优先用它 |
+| 只有终端，没有智能体 | 脚本模式 | 直接跑脚本，判断照 `judgment.md` 自己做 |
+| 一个 Chromium 浏览器都没有（只能用 Firefox） | 手动记账 | `python scripts/ledger.py`，判断和统计照用 |
+
+**没有 Chrome 不是问题**：Edge（Windows 自带）、Brave、Vivaldi、Chromium 都支持。
+CDP 是浏览器自带的调试协议，**一个扩展都不用装**。
 
 ```bash
-python scripts/browser.py --list      # 看看你机器上有哪些 Chromium 系浏览器
+python scripts/browser.py --list       # 看看你机器上有哪些 Chromium 系浏览器
+python scripts/cdp_client.py --launch  # 带调试端口起一个，免扩展
 ```
 
-完整的环境选项与降级路径见 **[references/portability.md](references/portability.md)**。
+完整的环境选项见 **[references/portability.md](references/portability.md)**。
 
 ---
 
@@ -59,11 +62,12 @@ python scripts/browser.py --list      # 看看你机器上有哪些 Chromium 系
 ```bash
 git clone https://github.com/chake111/boss-daily-apply.git
 cd boss-daily-apply
-python scripts/selftest.py                    # 26 项离线自检，不碰浏览器
+python scripts/selftest.py                    # 27 项自检，含一次真浏览器点击（--no-browser 跳过）
 python scripts/install.py --list              # 你的智能体该装哪
 python scripts/install.py --target claude     # 或 workbuddy / cursor / codex / plain
 python scripts/bootstrap.py                   # 建工作目录、拷配置、建 resume 目录
-python scripts/env_check.py                   # 浏览器 / WebBridge / 登录态
+python scripts/cdp_client.py --launch         # 起浏览器（免扩展），首次扫码登录一次
+python scripts/env_check.py                   # 浏览器 / 通道 / 登录态 三条自检
 ```
 
 装好后改两个文件（默认工作目录 `~/.boss-daily-apply`，从旧版本升级会自动沿用旧目录）：
@@ -88,13 +92,16 @@ python scripts/phase_stream.py --mode report --workdir "$BOSS_WORKDIR"
 
 ## 前置依赖
 
-- **Kimi WebBridge**，本地端口 `10086`，控制一台**已登录 BOSS直聘**的浏览器。
-  **不能用 CDP 直连或内置浏览器替代** —— 会丢登录态。
-  仅全自动模式需要；不装就走 `ledger.py` 的半自动模式。
 - **任意 Chromium 系浏览器**（Chrome / Edge / Brave / Vivaldi / Chromium / Opera）。
+  **不要求 Chrome**。
+- **自动化通道，二选一**：
+  - **CDP**（默认推荐）：浏览器自带的调试协议，`cdp_client.py --launch` 即可，**零扩展**。
+  - **WebBridge**：Kimi WebBridge 扩展 + 本地服务（端口 10086），已有就自动优先用。
+  - 都不能用 CDP 直连内置浏览器——拿不到你的登录态。
 - Python 3.9+，**只用标准库**，不需要 `pip install`。
-- Windows 上浏览器要用 `explorer.exe '<可执行文件路径>'` 拉起（`scripts/browser.py --launch` 已经这么做）：
-  bash 直接调静默失败，`Start-Process` / `cmd start` 会在 1~2 分钟内被会话回收。
+- Windows 上浏览器要用 `explorer.exe '<路径>'` 或 `DETACHED_PROCESS` 拉起
+  （`browser.py` / `cdp_client.py` 已经这么做）：`Start-Process` / `cmd start`
+  会在 1~2 分钟内被会话回收。
 
 ---
 
@@ -117,14 +124,15 @@ scripts/
   phase_stream.py   收尾生成 投递汇总.html
   ledger.py         无浏览器模式：手动记账，报表口径不受影响
   browser.py        浏览器适配层（检测 / 启动，不限 Chrome）
+  cdp_client.py     CDP 后端：免扩展的自动化通道（手写 WebSocket，零依赖）
   install.py        装到 workbuddy / claude / cursor / codex，或纯文本用法
   paths.py          路径解析（代码与状态分离）
   bootstrap.py      首次安装：建目录、拷配置、检查简历图
-  selftest.py       离线自检（不碰浏览器、不碰真实台账）
+  selftest.py       自检 27 项（含一次 headless 浏览器点击；--no-browser 跳过）
 references/
   runbook.md        11 步完整执行细节
   judgment.md       判定标准 + 23 条边界案例
-  pitfalls.md       22 条踩坑（现象 → 根因 → 处置）
+  pitfalls.md       24 条踩坑（现象 → 根因 → 处置）
   metrics.md        回复率口径与 A/B 实验纪律
   portability.md    环境适配：没有 Chrome / 不用 WorkBuddy 怎么办
   dom_structure.md  BOSS 页面选择器实测对照表
