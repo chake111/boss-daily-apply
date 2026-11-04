@@ -59,14 +59,15 @@ def state(name):
 
 
 def config(name):
-    """找配置文件：工作目录/config 优先，其次技能目录/config。
+    """找配置文件：工作目录/config 优先，其次工作目录根（旧布局），最后技能目录/config。
 
-    这样用户可以只覆盖其中一份（比如只改 blacklist.json），
-    其余继续跟技能一起升级。
+    这样用户可以只覆盖其中一份（比如只改 blacklist.json），其余继续跟技能一起升级；
+    从旧版本升级上来的用户，配置还散在 boss-data/ 根目录，也能直接命中，不用搬家。
     """
     override = os.environ.get("BOSS_CONFIG_DIR")
     bases = ([_norm(override)] if override else []) + [
         os.path.join(WORKDIR, "config"),
+        WORKDIR,
         BUILTIN_CONFIG_DIR,
     ]
     for base in bases:
@@ -76,13 +77,27 @@ def config(name):
     return os.path.join(BUILTIN_CONFIG_DIR, name)
 
 
+def legacy_profile_candidates():
+    """旧版本可能把档案放在哪。用于首次迁移，不参与长期查找。"""
+    home = os.path.expanduser("~")
+    return [
+        # 老布局：档案和脚本一起放在技能目录
+        os.path.join(SKILL_DIR, "user_profile.json"),
+        # 上一代技能包（boss-zhipin-deliver）的固定位置
+        os.path.join(home, ".workbuddy", "skills", "boss-zhipin-deliver", "user_profile.json"),
+    ]
+
+
 def profile():
-    """个人档案 user_profile.json 的路径（不保证存在）。"""
+    """个人档案 user_profile.json 的路径（不保证存在）。
+
+    查找顺序：BOSS_PROFILE → <工作目录>/user_profile.json → 旧位置（见上）。
+    旧位置只作为兼容：找到就说明是升级上来的，bootstrap 会提示把它搬到工作目录。
+    """
     p = os.environ.get("BOSS_PROFILE")
     if p:
         return _norm(p)
-    for cand in (os.path.join(WORKDIR, "user_profile.json"),
-                 os.path.join(SKILL_DIR, "user_profile.json")):
+    for cand in [os.path.join(WORKDIR, "user_profile.json")] + legacy_profile_candidates():
         if os.path.exists(cand):
             return cand
     return os.path.join(WORKDIR, "user_profile.json")
@@ -103,12 +118,13 @@ def resume_variants():
 
 def describe():
     """给 --doctor / bootstrap 用的可读路径摘要。"""
+    cfg_dir = os.path.dirname(config("blacklist.json"))
     return "\n".join([
         "技能目录  " + SKILL_DIR,
         "工作目录  " + WORKDIR,
         "个人档案  " + profile() + ("" if os.path.exists(profile()) else "  (未创建)"),
         "简历图    " + resume_img() + ("" if os.path.exists(resume_img()) else "  (未放置)"),
-        "配置目录  " + config("."),
+        "配置来源  " + cfg_dir,
     ])
 
 

@@ -59,10 +59,16 @@ def main():
 
     prof = os.path.join(paths.WORKDIR, "user_profile.json")
     if not os.path.exists(prof):
-        example = os.path.join(paths.BUILTIN_CONFIG_DIR, "user_profile.example.json")
-        if os.path.exists(example):
-            shutil.copyfile(example, prof)
-            print("  [写入] %s  ← 请填写你的城市 / 方向 / 期望薪资" % prof)
+        legacy = next((p for p in paths.legacy_profile_candidates() if os.path.exists(p)), "")
+        if legacy:
+            # 从旧版本升级上来：档案里有城市/方向的真实配置，直接搬过来
+            shutil.copyfile(legacy, prof)
+            print("  [迁移] %s  ← 从 %s" % (prof, legacy))
+        else:
+            example = os.path.join(paths.BUILTIN_CONFIG_DIR, "user_profile.example.json")
+            if os.path.exists(example):
+                shutil.copyfile(example, prof)
+                print("  [写入] %s  ← 请填写你的城市 / 方向 / 期望薪资" % prof)
     else:
         print("  [保留] %s" % prof)
 
