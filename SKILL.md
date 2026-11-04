@@ -1,6 +1,6 @@
 ---
 name: boss-daily-apply
-description: "BOSS直聘每日批量投递 runbook：探供给→按证据强度配比→逐张走卡读 JD→AI 语义终审→当场投递→分批补发简历图与按方向话术→收尾出汇总页与回复台账。含 jobType=1902 实习通道、分页绕懒加载、机械否决库、Wilson 区间回复率报表。当用户说『投递』『今天投 N 份』『继续投』『BOSS 投简历』『看看回复』，或要在 BOSS直聘 上按城市/方向/届别批量投实习岗时使用。依赖 Kimi WebBridge（127.0.0.1:10086）驱动已登录的 Chrome，不可用 CDP 或内置浏览器替代。Daily BOSS Zhipin job-application runbook — supply probing, evidence-weighted allocation, one-card-at-a-time JD review, semantic gating, on-the-spot apply, staged resume-image follow-ups, and a Wilson-interval reply report."
+description: "BOSS直聘每日批量投递 runbook：探供给→按证据强度配比→逐张走卡读 JD→AI 语义终审→当场投递→分批补发简历图与按方向话术→收尾出汇总页与回复台账。含 jobType=1902 实习通道、分页绕懒加载、机械否决库、Wilson 区间回复率报表。当用户说『投递』『今天投 N 份』『继续投』『BOSS 投简历』『看看回复』，或要在 BOSS直聘 上按城市/方向/届别批量投实习岗时使用。依赖 Kimi WebBridge（127.0.0.1:10086）驱动已登录的 Chromium 系浏览器（Chrome/Edge/Brave 均可，不要求 Chrome），不可用 CDP 或内置浏览器替代；没有浏览器扩展时可用 ledger.py 半自动记账。Daily BOSS Zhipin job-application runbook — supply probing, evidence-weighted allocation, one-card-at-a-time JD review, semantic gating, on-the-spot apply, staged resume-image follow-ups, and a Wilson-interval reply report."
 version: 3.0.0
 agent_created: true
 metadata:
@@ -28,15 +28,32 @@ metadata:
 
 ## 前置依赖
 
-- **Kimi WebBridge**，本地端口 `10086`，控制一台**已登录 BOSS直聘**的 Chrome。
-- **不可**用 CDP 直连 / 内置浏览器接管——会丢登录态。桥连不上就修桥，别换工具。
+- **任意 Chromium 系浏览器**：Chrome / Edge（Windows 自带）/ Brave / Vivaldi / Chromium / Opera。
+  **不要求 Chrome**；Firefox / Safari 装不了 WebBridge 扩展，是硬限制。
+- **Kimi WebBridge**，本地端口 `10086`，控制一台**已登录 BOSS直聘**的浏览器。
+  **不可**用 CDP 直连 / 内置浏览器接管——会丢登录态。桥连不上就修桥，别换工具。
 - Python 3.9+，只用标准库，无需 `pip install`。
+
+### 环境不满足时（别卡在这里）
+
+这个 skill 的价值一半在判断表，一半在自动化。**没有桥也能用后半段**：
+
+| 情况 | 降级方案 |
+|---|---|
+| 装不了扩展（公司电脑 / 权限受限） | `python scripts/ledger.py add ...` 手动记账；`stats.py` 照常出报表 |
+| 只有终端、没有智能体 | 直接跑脚本；JD 判定照 `references/judgment.md` 自己做 |
+| 浏览器 / 平台不支持 WebBridge | 同上，全流程转半自动 |
+
+`ledger.py` 写的是和 driver **完全相同**的 schema，所以指标、报表、去重规则全部沿用。
+完整的环境矩阵见 `references/portability.md`。
 
 首次安装：
 
 ```bash
-python "$SKILL_DIR/scripts/bootstrap.py"     # 建工作目录 + 拷配置 + 建 resume 目录
-python "$SKILL_DIR/scripts/env_check.py"     # Chrome / WebBridge / 登录态自检
+python "$SKILL_DIR/scripts/install.py" --list     # 你的智能体该装哪（workbuddy/claude/cursor/codex）
+python "$SKILL_DIR/scripts/bootstrap.py"          # 建工作目录 + 拷配置 + 建 resume 目录
+python "$SKILL_DIR/scripts/env_check.py"          # 浏览器 / WebBridge / 登录态自检
+python "$SKILL_DIR/scripts/browser.py" --list     # 装了哪些浏览器、在不在跑
 ```
 
 `bootstrap.py` 之后必须改两个文件：`<工作目录>/user_profile.json`（城市、届别、方向、
@@ -53,14 +70,18 @@ scripts/
   reply_check.py    扫会话，出「待我动作」台账
   stats.py          回复率报表（Wilson 95% 区间）
   phase_stream.py   收尾生成 投递汇总.html
+  ledger.py         无浏览器模式：手动记账（schema 与 driver 一致）
+  browser.py        浏览器适配层（检测 / 启动，不限 Chrome）
+  install.py        装到各智能体，或输出纯文本用法
   paths.py          路径解析（工作目录 / 配置 / 简历图）
   bootstrap.py      首次安装：建目录、拷配置、检查简历图
-  selftest.py       离线自检（18 项，不碰浏览器）—— 改完代码先跑它
+  selftest.py       离线自检（不碰浏览器、不碰真实台账）—— 改完代码先跑它
 references/
   runbook.md        11 步完整执行细节 —— 遇到分支先查这里
   pitfalls.md       22 条踩坑，照做即可
   metrics.md        回复率口径与 A/B 纪律
   judgment.md       判定标准 + 边界案例表
+  portability.md    环境适配：没有 Chrome / 不用 WorkBuddy 怎么办
 ```
 
 ---
@@ -70,41 +91,56 @@ references/
 ### Step 0 · 开工三件事
 
 ```bash
-cd "$BOSS_WORKDIR"      # 默认 ~/WorkBuddy/BOSS/boss-data，所有状态文件都在这
+cd "$BOSS_WORKDIR"      # 默认 ~/.boss-daily-apply，所有状态文件都在这
 DRV="python $SKILL_DIR/scripts/_live_driver.py"
 ```
 
-先记基线（本轮份数、新增判否、今日累计都要靠它算）：
+先记基线（收尾时再跑一次，两个数相减就是本轮成果）：
 
-```python
-import json, os, datetime
-BASE = os.environ.get('BOSS_WORKDIR') or os.path.expanduser('~/WorkBuddy/BOSS/boss-data')
-sp = json.load(open(os.path.join(BASE, 'stream_progress.json'), encoding='utf-8'))
-ws = json.load(open(os.path.join(BASE, 'walk_state.json'), encoding='utf-8'))
-today = datetime.date.today().isoformat()
-print('base_delivered', len(sp['delivered']))
-print('base_rejected', len(ws.get('rejected_jids') or []))
-print('legacy_no_ts', sum(1 for r in sp['delivered'] if not r.get('delivered_at')))
+```bash
+python "$SKILL_DIR/scripts/ledger.py" status
 ```
 
-> 旧记录没有 `delivered_at`，所以"今日累计"不能数总数——以收尾时写入的 `daily_log.json` 为准。
+```
+工作目录  ~/.boss-daily-apply
+已投递    278 条（其中 61 条带时间戳）
+已判否    422 条
+今日已记  20 条
+```
+
+> 旧记录没有 `delivered_at`，所以"今日累计"不能数总数——以收尾时写入的
+> `daily_log.json` 为准；`status` 里的"带时间戳"那一行就是能算进当日的部分。
 
 ### Step 1 · 环境自检（能自己修的一律自己修）
+
+先看浏览器在不在（**不要求 Chrome**，Edge / Brave / Vivaldi 都行）：
+
+```bash
+python "$SKILL_DIR/scripts/browser.py" --list     # 装了哪些、在不在跑
+python "$SKILL_DIR/scripts/browser.py" --launch   # 默认挑"正在运行"的那个
+```
+
+再探桥：
 
 ```bash
 curl -s --noproxy '*' http://127.0.0.1:10086/status
 ```
 
 连不上就起服务（后台任务）：`"$HOME/.kimi-webbridge/bin/kimi-webbridge.exe" start --foreground`，
-等 5 秒重探。**Chrome 只能用 PowerShell 里的 `explorer.exe '<chrome.exe 路径>'` 拉起**——
-bash 直接调静默失败，`Start-Process` / `cmd start` 会在 1~2 分钟内被会话回收。
+等 5 秒重探。启动浏览器**必须走 `browser.py`**（它用 `explorer.exe` / `open -a` / `xdg-open`）——
+自己 `Start-Process` / `cmd start` 拉起的会在 1~2 分钟内被会话回收，扩展跟着掉线。
 
 `extension_connected` 连续 3 次为 true 才开工。只有这些才找人：WebBridge 缺文件/版本不匹配、
-扩展被禁用、Chrome 没装、登录态要扫码、出现验证码/滑块/人脸、上述步骤各试两轮仍不通。
+扩展被禁用、没有可用的 Chromium 浏览器、登录态要扫码、出现验证码/滑块/人脸、
+上述步骤各试两轮仍不通。
+
+> 桥或扩展怎么都装不上（公司电脑、Firefox、无权限）→ **不要卡在环境上**。
+> 转 `python scripts/ledger.py` 半自动模式：你在浏览器里自己投，脚本负责记账、去重和报表。
+> 判断标准、指标口径、A/B 纪律全都照用，功能只少"自动点击"这一块。
 
 ### Step 2 · 判 `document.hidden`（决定 A 路还是 B 路）
 
-Chrome 有原生遮挡检测：窗口被完全盖住时 `document.hidden=true`，BOSS 懒加载直接停住。
+Chromium 系浏览器有原生遮挡检测：窗口被完全盖住时 `document.hidden=true`，BOSS 懒加载直接停住。
 `hidden=true` **不是停手理由**，是走分页的信号。
 
 - **A 路**（hidden=false）：`walk --more` 能滚到底，穷尽判据 = 连续两次 `grew:false`。
@@ -206,8 +242,13 @@ python "$SKILL_DIR/scripts/send_img2.py" 1 "公司短名" --msg  # 只补某一�
 python "$SKILL_DIR/scripts/phase_stream.py" --mode report --workdir "$BOSS_WORKDIR"
 ```
 
-然后 `present_files` 打开 `$BOSS_WORKDIR/投递汇总.html`。
-再记一笔当日台账（`daily_log.json`），"今日累计"以它为唯一口径。
+然后打开 `$BOSS_WORKDIR/投递汇总.html`：能预览 HTML 的工具就预览，
+否则用系统默认程序打开（`start` / `open` / `xdg-open`），或者直接把绝对路径给用户。
+再记一笔当日台账，"今日累计"以它为唯一口径：
+
+```bash
+python "$SKILL_DIR/scripts/ledger.py" daily --n <本轮份数>
+```
 
 清掉本轮自己建的临时脚本；`stream_progress.json` / `walk_state.json` / `reply_log.json` 不许动。
 
@@ -232,7 +273,7 @@ PYTHONPATH="$SKILL_DIR" python "$SKILL_DIR/scripts/reply_check.py"
 - 平台风控 / 异常登录提示
 - A 路下列表空、`walk --more` 连续两次 `grew:false` 且页面没有"到底了"文案
 - 连续 3 次投递失败
-- 扩展连续掉线，重启 Chrome 两轮仍连不上
+- 扩展连续掉线，重启浏览器两轮仍连不上
 
 `document.hidden` **不在**停手条件里——走分页兜底。
 

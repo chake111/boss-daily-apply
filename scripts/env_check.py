@@ -55,28 +55,28 @@ class EnvResult:
         return self.message
 
 
-# ── Chrome 检测 ────────────────────────────────────
-def _check_chrome():
-    """检测 Chrome 是否安装在常见路径。"""
-    chrome_paths = [
-        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-        os.path.expanduser(r"~\AppData\Local\Google\Chrome\Application\chrome.exe"),
-    ]
-    for p in chrome_paths:
-        if os.path.exists(p):
-            return True, f"已安装 ({p})"
-    # Windows 还可尝试 where/which
+# ── 浏览器检测（Chromium 系，不限定 Chrome）─────────
+def _check_browser():
+    """检测任意 Chromium 系浏览器。
+
+    WebBridge 是 Chromium 扩展，Edge / Brave / Vivaldi / Chromium / Opera 都能装，
+    没必要强制别人装 Chrome（Windows 自带 Edge 就够）。Firefox / Safari 装不了，
+    会在提示里说明。
+    """
     try:
-        r = subprocess.run(["where", "chrome"], capture_output=True, text=True, timeout=5)
-        if r.returncode == 0 and r.stdout.strip():
-            return True, f"已安装 ({r.stdout.strip().splitlines()[0]})"
-    except Exception:
-        pass
-    return False, (
-        "未检测到 Chrome 浏览器。\n"
-        "   请前往 https://www.google.com/chrome/ 下载安装。"
-    )
+        from scripts import browser as _browser
+        found = _browser.detect()
+    except Exception as e:
+        return False, f"浏览器检测失败: {e}"
+
+    if not found:
+        return False, _browser.INSTALL_HINT
+
+    running = [b for b in found if _browser.is_running(b) is True]
+    names = "、".join(b["name"] for b in found)
+    if running:
+        return True, f"{names}（运行中：{running[0]['name']}，扩展应装在这个上）"
+    return True, f"{names}（都没在运行；开工前先启动其中一个）"
 
 
 # ── WebBridge 检测 ─────────────────────────────────
@@ -98,9 +98,11 @@ def _check_webbridge():
         return False, (
             f"WebBridge 未在端口 {_WEBBRIDGE_PORT} 响应。\n"
             "   请确认：\n"
-            "   ① 已安装 Kimi WebBridge 插件 → https://www.kimi.com/zh-cn/features/webbridge\n"
-            "   ② Chrome 中已启用该插件\n"
-            f"   ③ 起服务（全路径，它不在 PATH 里）：\"{_exe}\" start --foreground"
+            "   ① 已安装 Kimi WebBridge 扩展 → https://www.kimi.com/zh-cn/features/webbridge\n"
+            "      （Edge / Brave / Vivaldi 也能装：Edge 需先在扩展页打开「允许来自其他商店的扩展」）\n"
+            "   ② 在**正在运行的那个浏览器**里启用它，并已登录 BOSS直聘\n"
+            f"   ③ 起服务（全路径，它不在 PATH 里）：\"{_exe}\" start --foreground\n"
+            "   没装扩展也能用：python scripts/ledger.py（手动投 + 自动统计）"
         )
     except Exception as e:
         return False, f"WebBridge 连接异常: {e}"
@@ -160,9 +162,9 @@ def check_env(verbose=True):
     """
     result = EnvResult()
 
-    # ① Chrome
-    passed, detail = _check_chrome()
-    result.add("Chrome 浏览器", passed, detail)
+    # ① 浏览器（不要求 Chrome：任何 Chromium 系都能装 WebBridge）
+    passed, detail = _check_browser()
+    result.add("浏览器", passed, detail)
 
     # ② WebBridge
     passed, detail = _check_webbridge()

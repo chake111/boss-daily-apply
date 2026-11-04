@@ -5,8 +5,29 @@
 不是点击器，是一套**判断流程**：先探供给 → 按简历证据强度分配方向 → 一张一张读 JD →
 语义终审判该不该投 → 当场投 → 分批补发简历图和一句话 → 收尾出汇总页和回复台账。
 
-> 这是一个 **WorkBuddy / Claude Skill** 形态的仓库：`SKILL.md` 是技能定义，
-> `scripts/` 是可执行的机械层，`references/` 是给人看的判定与踩坑手册。
+> **和具体工具无关**：`SKILL.md` 是技能定义，`scripts/` 是可执行的机械层，
+> `references/` 是给人看的判定与踩坑手册。WorkBuddy、Claude Code、Cursor、Codex、
+> 甚至纯终端都能用 —— 一个 markdown + 一堆标准库脚本而已。
+
+---
+
+## 先看这里：你需要什么
+
+| 你的情况 | 能用到什么 | 怎么做 |
+|---|---|---|
+| Chromium 浏览器（**不必是 Chrome**）+ WebBridge 扩展 + 任意智能体 | 全自动 | 正常装，见下方快速开始 |
+| 浏览器有，但装不了扩展（公司电脑、权限受限） | 判定 + 记账 + 统计 | `python scripts/ledger.py`，自己点投递 |
+| 只有终端，没有智能体 | 脚本 + 手册 | 直接跑脚本，判断照 `judgment.md` 自己做 |
+| 只是想先看看 | 一份可执行手册 | 读 `SKILL.md` + `references/` |
+
+**没有 Chrome 不是问题**：Edge（Windows 自带）、Brave、Vivaldi、Chromium 都能装 WebBridge 扩展。
+Firefox / Safari 装不了，那是硬限制。
+
+```bash
+python scripts/browser.py --list      # 看看你机器上有哪些 Chromium 系浏览器
+```
+
+完整的环境选项与降级路径见 **[references/portability.md](references/portability.md)**。
 
 ---
 
@@ -38,19 +59,21 @@
 ```bash
 git clone https://github.com/chake111/boss-daily-apply.git
 cd boss-daily-apply
-python scripts/bootstrap.py      # 建工作目录、拷配置、建 resume 目录
-python scripts/env_check.py      # Chrome / WebBridge / 登录态自检
-python scripts/selftest.py       # 离线自检 18 项，不碰浏览器
+python scripts/selftest.py                    # 26 项离线自检，不碰浏览器
+python scripts/install.py --list              # 你的智能体该装哪
+python scripts/install.py --target claude     # 或 workbuddy / cursor / codex / plain
+python scripts/bootstrap.py                   # 建工作目录、拷配置、建 resume 目录
+python scripts/env_check.py                   # 浏览器 / WebBridge / 登录态
 ```
 
-装好后改两个文件：
+装好后改两个文件（默认工作目录 `~/.boss-daily-apply`，从旧版本升级会自动沿用旧目录）：
 
 | 文件 | 改什么 |
 |---|---|
-| `~/WorkBuddy/BOSS/boss-data/user_profile.json` | 城市+city_code、届别、技术栈、`role_summary`、`own_greeting_prefix` |
-| `~/WorkBuddy/BOSS/boss-data/config/greetings.json` | 四个方向各一句 40 字内的话术 |
+| `<工作目录>/user_profile.json` | 城市+city_code、届别、技术栈、`role_summary`、`own_greeting_prefix` |
+| `<工作目录>/config/greetings.json` | 四个方向各一句 40 字内的话术 |
 
-把简历长图放到 `~/WorkBuddy/BOSS/boss-data/resume/resume.png`，然后：
+把简历长图放到 `<工作目录>/resume/resume.png`，然后：
 
 ```bash
 python scripts/supply_probe.py --rounds 20        # 探供给，出配额
@@ -59,16 +82,18 @@ python scripts/send_img2.py 5 --msg               # 每投满 5 份补一次图
 python scripts/phase_stream.py --mode report --workdir "$BOSS_WORKDIR"
 ```
 
-把 `SKILL.md` 交给支持 Skill 的智能体（WorkBuddy / Claude Code），它会按这份 runbook 干活。
+没装扩展？把上面第三条换成 `python scripts/ledger.py`，其余照旧。
 
 ---
 
 ## 前置依赖
 
-- **Kimi WebBridge**，本地端口 `10086`，控制一台**已登录 BOSS直聘** 的 Chrome。
+- **Kimi WebBridge**，本地端口 `10086`，控制一台**已登录 BOSS直聘**的浏览器。
   **不能用 CDP 直连或内置浏览器替代** —— 会丢登录态。
+  仅全自动模式需要；不装就走 `ledger.py` 的半自动模式。
+- **任意 Chromium 系浏览器**（Chrome / Edge / Brave / Vivaldi / Chromium / Opera）。
 - Python 3.9+，**只用标准库**，不需要 `pip install`。
-- Windows 上 Chrome 必须用 PowerShell 的 `explorer.exe '<chrome.exe 路径>'` 拉起：
+- Windows 上浏览器要用 `explorer.exe '<可执行文件路径>'` 拉起（`scripts/browser.py --launch` 已经这么做）：
   bash 直接调静默失败，`Start-Process` / `cmd start` 会在 1~2 分钟内被会话回收。
 
 ---
@@ -90,14 +115,18 @@ scripts/
   reply_check.py    扫会话 → 「待我动作」台账
   stats.py          回复率报表（Wilson 95% 区间）
   phase_stream.py   收尾生成 投递汇总.html
+  ledger.py         无浏览器模式：手动记账，报表口径不受影响
+  browser.py        浏览器适配层（检测 / 启动，不限 Chrome）
+  install.py        装到 workbuddy / claude / cursor / codex，或纯文本用法
   paths.py          路径解析（代码与状态分离）
   bootstrap.py      首次安装：建目录、拷配置、检查简历图
-  selftest.py       离线自检（18 项，不碰浏览器）
+  selftest.py       离线自检（不碰浏览器、不碰真实台账）
 references/
   runbook.md        11 步完整执行细节
   judgment.md       判定标准 + 23 条边界案例
   pitfalls.md       22 条踩坑（现象 → 根因 → 处置）
   metrics.md        回复率口径与 A/B 实验纪律
+  portability.md    环境适配：没有 Chrome / 不用 WorkBuddy 怎么办
   dom_structure.md  BOSS 页面选择器实测对照表
 ```
 
@@ -117,7 +146,7 @@ BOSS 搜索页的 `&page=N` 有效，换页能拿到不同卡片，**完全绕�
 
 ### 分页绕开 `document.hidden`
 
-Chrome 有原生遮挡检测：窗口被完全盖住时 `document.hidden=true`，BOSS 的懒加载直接停住。
+Chromium 系浏览器有原生遮挡检测：窗口被完全盖住时 `document.hidden=true`，BOSS 的懒加载直接停住。
 这时 `walk --more` 永远 `grew:false`，看起来"每页都到底了"。
 **别去调窗口**（`activate_tab` 只切标签不抬窗口，`ShowWindow` 被安全策略拦，点任务栏回来立刻又 hidden，
 WebBridge 也没有 focus/raise 动作）—— 直接走分页。
@@ -128,12 +157,16 @@ WebBridge 也没有 focus/raise 动作）—— 直接走分页。
 
 | 环境变量 | 默认值 | 作用 |
 |---|---|---|
-| `BOSS_WORKDIR` | `~/WorkBuddy/BOSS/boss-data` | 所有状态文件 |
-| `BOSS_CONFIG_DIR` | 依次找 `<工作目录>/config`、`<技能目录>/config` | 配置覆盖 |
+| `BOSS_WORKDIR` | `~/.boss-daily-apply`（旧位置存在则自动沿用） | 所有状态文件 |
+| `BOSS_CONFIG_DIR` | 依次找 `<工作目录>/config`、`<工作目录>`、`<技能目录>/config` | 配置覆盖 |
 | `BOSS_PROFILE` | `<工作目录>/user_profile.json` | 个人档案 |
 | `BOSS_RESUME_IMG` | `<工作目录>/resume/resume.png` | 简历图 |
+| `BOSS_BROWSER` | 自动检测 | 指定浏览器可执行文件 |
 
 多账号 / 多城市并行跑：给每个实例一个 `BOSS_WORKDIR` 即可。
+
+> 早期默认是 `~/WorkBuddy/BOSS/boss-data`。该目录若存在会被继续使用，数据不会丢；
+> 想迁到新默认位置见 [references/portability.md](references/portability.md)。
 
 ---
 

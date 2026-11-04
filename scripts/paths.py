@@ -11,8 +11,9 @@
 
 所有路径都可以用环境变量覆盖，便于多账号 / 多城市并行跑：
 
-    BOSS_WORKDIR     工作目录，默认 ~/WorkBuddy/BOSS/boss-data
-    BOSS_CONFIG_DIR  配置目录，默认依次找 <工作目录>/config、<技能目录>/config
+    BOSS_WORKDIR     工作目录，默认 ~/.boss-daily-apply
+                     （若该目录不存在、而历史位置 ~/WorkBuddy/BOSS/boss-data 存在，则沿用历史位置）
+    BOSS_CONFIG_DIR  配置目录，默认依次找 <工作目录>/config、<工作目录>、<技能目录>/config
     BOSS_PROFILE     个人档案 JSON，默认依次找 <工作目录>/user_profile.json、<技能目录>/user_profile.json
     BOSS_RESUME_IMG  简历图，默认 <工作目录>/resume/resume.png
 """
@@ -36,12 +37,29 @@ def _norm(p):
     return os.path.abspath(p) if p else ""
 
 
+def legacy_workdirs():
+    """历史默认位置。用于新默认目录不存在时自动沿用，避免升级后"数据不见了"。"""
+    home = os.path.expanduser("~")
+    return [
+        os.path.join(home, "WorkBuddy", "BOSS", "boss-data"),   # 早期版本（WorkBuddy 布局）
+    ]
+
+
 def workdir():
-    """工作目录：环境变量优先，否则 ~/WorkBuddy/BOSS/boss-data。"""
+    """工作目录。
+
+    优先级：BOSS_WORKDIR → <新默认> → 历史默认（存在则沿用）。
+    新默认是 `~/.boss-daily-apply`：和具体工具无关，换 agent、换机器都不用改配置。
+    """
     p = os.environ.get("BOSS_WORKDIR")
     if p:
         return _norm(p)
-    return _norm(os.path.join(os.path.expanduser("~"), "WorkBuddy", "BOSS", "boss-data"))
+    neutral = _norm(os.path.join(os.path.expanduser("~"), ".boss-daily-apply"))
+    if not os.path.exists(neutral):
+        for old in legacy_workdirs():
+            if os.path.exists(old):
+                return _norm(old)
+    return neutral
 
 
 WORKDIR = workdir()
@@ -117,15 +135,18 @@ def resume_variants():
 
 
 def describe():
-    """给 --doctor / bootstrap 用的可读路径摘要。"""
+    """给 bootstrap / 排查用的可读路径摘要。"""
     cfg_dir = os.path.dirname(config("blacklist.json"))
-    return "\n".join([
+    lines = [
         "技能目录  " + SKILL_DIR,
         "工作目录  " + WORKDIR,
         "个人档案  " + profile() + ("" if os.path.exists(profile()) else "  (未创建)"),
         "简历图    " + resume_img() + ("" if os.path.exists(resume_img()) else "  (未放置)"),
         "配置来源  " + cfg_dir,
-    ])
+    ]
+    if WORKDIR in [os.path.normpath(p) for p in legacy_workdirs()]:
+        lines.append("          ↑ 沿用了历史目录；想把数据搬到新默认位置，设 BOSS_WORKDIR 后重跑 bootstrap")
+    return "\n".join(lines)
 
 
 if __name__ == "__main__":

@@ -15,7 +15,7 @@ WebBridge HTTP 客户端 v4 — 共享模块
 v4 变更 (2026-07-30):
   - extract_jobs() 增加 DOM 兜底：Vue __vue__ 私有 API 失效时，
     改用已验证的 DOM 选择器 (.job-name/.boss-name/.company-location) 提取
-  - clean_pid_files() 将 ~/.trae-cn/*.pid 改为 ~/.workbuddy/*.pid
+  - clean_pid_files() 只清桥自己的 pid 文件（早期版本还会误删宿主的 ~/.workbuddy/*.pid）
   - register_signal_guard() 增加 SIGINT（Windows 亦可捕获）
 
 用法:
@@ -274,15 +274,27 @@ def wait_for_feedback(expected_texts, timeout=8, poll=0.5,
 
 
 def _list_other_boss_script_pids():
-    """枚举除自己外、正在运行的其他 boss-zhipin-deliver 脚本进程 pid。
+    """枚举除自己外、正在运行的本项目脚本进程 pid。
 
-    仅靠进程名不够，必须看命令行含 'boss-zhipin-deliver/scripts/phase'，
-    避免误杀用户其它 python 程序。
+    仅靠进程名不够，必须看命令行含本项目的入口文件名，避免误杀用户其它 python 程序。
+    早期版本写死了 `boss-zhipin-deliver/scripts/phase`，换个安装目录或换 skill 名
+    就永远匹配不到，标签页互抢的问题会静默回来。
     """
     me = os.getpid()
+    if not sys.platform.startswith("win"):
+        # macOS / Linux：pgrep -f 直接按命令行匹配，比 Get-CimInstance 简单得多
+        try:
+            r = subprocess.run(
+                ["pgrep", "-f", "_live_driver.py|phase_stream.py|send_img2.py"],
+                capture_output=True, text=True, timeout=20)
+            return [int(x) for x in r.stdout.split() if x.isdigit() and int(x) != me]
+        except Exception:
+            return []
     try:
         ps = (r"Get-CimInstance Win32_Process -Filter \"Name='python.exe'\""
-              r" | Where-Object { $_.CommandLine -like '*boss-zhipin-deliver/scripts/phase*'"
+              r" | Where-Object { ($_.CommandLine -like '*_live_driver.py*'"
+              r" -or $_.CommandLine -like '*phase_stream.py*'"
+              r" -or $_.CommandLine -like '*send_img2.py*')"
               r" -and $_.ProcessId -ne %d }"
               r" | Select-Object -ExpandProperty ProcessId") % me
         out = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
@@ -310,8 +322,12 @@ def kill_other_boss_scripts():
 
 
 # 标签页独占锁文件（记录当前占用脚本的 pid，供监督者读取"谁在控制 tab"）
-_TAB_LOCK_PATH = os.path.expanduser(
-    "~/.workbuddy/skills/boss-zhipin-deliver/.tab_lock")
+# 放在工作目录：早期版本写死在 ~/.workbuddy/skills/... 下，换工具/换机器就失效。
+try:
+    from scripts import paths as _paths
+    _TAB_LOCK_PATH = _paths.state(".tab_lock")
+except Exception:                                    # pragma: no cover
+    _TAB_LOCK_PATH = os.path.join(os.path.expanduser("~"), ".boss-daily-apply", ".tab_lock")
 
 
 def acquire_tab_lock(script_name="unknown"):
@@ -711,18 +727,22 @@ _BRIDGE_HINT = """\
 ✗ 连不上 Kimi WebBridge（{host}:{port}）—— 不是脚本坏了，是桥没起来。
 
 按顺序试：
-  1) 起服务（后台任务）：
+  1) 先看浏览器在不在（Chrome / Edge / Brave / Vivaldi 都行，不限于 Chrome）：
+     python scripts/browser.py --list
+     python scripts/browser.py --launch        # 默认挑正在运行的那个
+  2) 起服务（后台任务）：
      "{exe}" start --foreground
      等 5 秒再探。
-  2) 用全路径看状态（kimi-webbridge 不在 PATH 里，直接敲命令会 command not found，
+  3) 用全路径看状态（kimi-webbridge 不在 PATH 里，直接敲命令会 command not found，
      别把它当成"服务挂了"）：
      "{exe}" status
      netstat -ano | findstr {port}
-  3) 还不行就清残留 pid 后重起：~/.kimi-webbridge/daemon.pid
-  4) 确认 Chrome 已开、扩展已连接。扩展断开就正常关掉 Chrome
-     （taskkill //IM chrome.exe，不要 /F）再拉一次。
+  4) 还不行就清残留 pid 后重起：~/.kimi-webbridge/daemon.pid
+  5) 确认扩展装在**正在运行的那个浏览器**里、且已登录 BOSS直聘。
+     扩展断开就正常关掉浏览器（不要强杀）再拉一次。
 
-只有这些都试过两轮仍不通，才算"环境需要人处理"。
+这些都试过两轮仍不通，说明这台机器不适合自动化 —— 改用无浏览器模式：
+     python scripts/ledger.py --help       # 手动投，脚本负责记账和统计
 """
 
 
@@ -769,11 +789,14 @@ def ensure_active_tab(session=SESSION, timeout_wait=10):
 
 
 def clean_pid_files():
-    """清理 WebBridge / WorkBuddy PID 残留文件"""
+    """清理 WebBridge 的 PID 残留文件。
+
+    只动桥自己的 pid 文件。早期版本还会顺手删 ~/.workbuddy/*.pid（那是宿主工具
+    的进程文件，和本技能无关），已移除——删别人的 pid 文件只会让宿主状态错乱。
+    """
     pid_patterns = [
-        os.path.expanduser("~/.kimi-webbridge/daemon.pid"),
-        os.path.expanduser("~/.kimi-webbridge*.pid"),
-        os.path.expanduser("~/.workbuddy/*.pid"),
+        os.path.expanduser(os.path.join("~", ".kimi-webbridge", "daemon.pid")),
+        os.path.expanduser(os.path.join("~", ".kimi-webbridge*.pid")),
     ]
     cleaned = []
     for pattern in pid_patterns:

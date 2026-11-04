@@ -607,11 +607,11 @@ def run_verify(workdir, session=SESSION):
 # 收尾闭环：投递成果汇报 + 打赏（二合一自包含 HTML）
 # ───────────────────────────────────────────────────────────
 def write_summary_page(workdir, profile=None):
-    """【收尾闭环 · 必做】生成本轮「投递成果汇报 + 打赏」二合一自包含 HTML。
+    """【收尾闭环】生成本轮「投递成果汇报」自包含 HTML。
 
     读取 workdir/stream_progress.json 中已投递记录，按 direction 分组，
-    嵌入微信/支付宝赞赏码（base64 内嵌，单文件自包含），输出 投递汇总.html。
-    每次投递任务结束 MUST 调用本函数并 present_files 展示该页。
+    输出 投递汇总.html（单文件，无外链）。若技能目录 assets/ 下放了赞赏码图片，
+    会额外渲染一块打赏区；公开仓库不附带任何收款码，clone 下来默认没有这一块。
 
     方向分组依据：每条投递记录自带 direction 字段（deliver 第5参数写入）；
     缺失时回退 industry → '其他'，保证历史数据也能正常出页。

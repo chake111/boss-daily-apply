@@ -7,20 +7,21 @@
 
 ## 环境类
 
-### 1. Chrome 被会话回收，扩展跟着掉
+### 1. 浏览器被会话回收，扩展跟着掉
 
-**现象**：`Start-Process` / `cmd //c start` 拉起的 Chrome，1~2 分钟内进程消失，WebBridge 扩展断连。
+**现象**：`Start-Process` / `cmd //c start` 拉起的 Chromium 浏览器，1~2 分钟内进程消失，WebBridge 扩展断连。
 
 **根因**：这两种方式启动的子进程挂在当前会话下，会话结束就被回收。
 
-**处置**：只用 PowerShell 里的 `explorer.exe '<chrome.exe 路径>'`。让 explorer 去拉，
-进程归属到桌面 shell，不会被回收。bash 里直接调 `explorer.exe` 会静默无反应（实测两次）。
+**处置**：用 `python scripts/browser.py --launch`。它让桌面 shell 去拉
+（Windows `explorer.exe` / macOS `open -a` / Linux `xdg-open`），进程归属到桌面，
+不会被回收。bash 里直接调 `explorer.exe` 会静默无反应（实测两次）。
 
 ### 2. `hidden=true` 时懒加载停住，`grew` 永远是 false
 
 **现象**：`walk --more` 连续返回 `grew:false`，看起来"每页都到底了"，但换页明明还有卡。
 
-**根因**：Chrome 原生遮挡检测——窗口被完全盖住时 `document.hidden=true`，
+**根因**：Chromium 系浏览器的原生遮挡检测——窗口被完全盖住时 `document.hidden=true`，
 BOSS 的懒加载直接停住。这不是"走空"，是"没加载"。
 
 **处置**：走 `&page=N` 分页（第 3 步）。**B 路禁止用 `grew:false` 判词走完**，
@@ -197,7 +198,7 @@ BOSS 的懒加载直接停住。这不是"走空"，是"没加载"。
 
 ## 一句话总结
 
-1. Chrome 只有 PowerShell 里 `explorer.exe` 拉起的能活。
+1. 浏览器只有交给桌面 shell（explorer / open -a / xdg-open）拉起的能活。
 2. `hidden=true` 别判"走空"，走 `&page=N`。
 3. 分页会重排，`fresh=0` 连测两页。
 4. 别指望把被遮挡的窗口调到前台。

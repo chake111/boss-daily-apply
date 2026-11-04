@@ -152,6 +152,32 @@ def main():
         print("\n[7] 无桥时的报错可读")
         check("driver 无桥 -> 修复指引（退出码 2）", lambda: _expect(
             run(["scripts/_live_driver.py", "walk"], wd, expect_ok=False), "不是脚本坏了"))
+
+        print("\n[8] 通用性：换浏览器 / 换智能体 / 无浏览器")
+        # 记账测的是"全新用户的空台账"，所以另开一个干净目录，别被上面的 fixture 干扰
+        wd2 = tempfile.mkdtemp(prefix="boss-selftest-ledger-")
+        try:
+            check("浏览器检测不依赖 Chrome", lambda: _json_has(
+                run(["scripts/browser.py", "--json"], wd, expect_ok=False), "found"))
+            check("ledger 空目录可用", lambda: _expect(
+                run(["scripts/ledger.py", "status"], wd2), "已投递    0 条"))
+            check("ledger add 记账", lambda: _expect(
+                run(["scripts/ledger.py", "add", "--title", "前端开发实习生",
+                     "--company", "星辰科技", "--direction", "前端开发"], wd2), "已记账"))
+            check("ledger 写入后 status 跟上", lambda: _expect(
+                run(["scripts/ledger.py", "status"], wd2), "已投递    1 条"))
+            check("ledger 去重（同岗位不重复记）", lambda: _expect(
+                run(["scripts/ledger.py", "add", "--title", "前端开发实习生",
+                     "--company", "星辰科技"], wd2), "已存在同岗位"))
+            check("ledger daily 记当日台账", lambda: _expect(
+                run(["scripts/ledger.py", "daily", "--n", "3"], wd2), "今日累计 3 份"))
+        finally:
+            shutil.rmtree(wd2, ignore_errors=True)
+        check("安装器能列出目标", lambda: _expect(
+            run(["scripts/install.py", "--list"], wd), "workbuddy"))
+        check("安装器支持 cursor 规则（dry-run）", lambda: _expect(
+            run(["scripts/install.py", "--target", "cursor", "--project", wd, "--dry-run"], wd),
+            ".cursor"))
     finally:
         shutil.rmtree(wd, ignore_errors=True)
 
@@ -179,6 +205,16 @@ def _not_expect(text, needle):
 def _exists(path):
     if not os.path.exists(path):
         raise AssertionError("文件不存在: " + path)
+
+
+def _json_has(text, key):
+    """输出里含合法 JSON 且带指定字段（浏览器恰好一个都没装时退出码非 0，也要能解析）。"""
+    start = text.find("{")
+    if start < 0:
+        raise AssertionError("没有 JSON 输出：\n%s" % text[-300:])
+    data = json.loads(text[start:])
+    if key not in data:
+        raise AssertionError("JSON 缺字段 %r：%s" % (key, list(data)))
 
 
 def _assert_sum(text, rounds):

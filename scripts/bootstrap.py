@@ -7,11 +7,12 @@
     python scripts/bootstrap.py --print-config  # 只打印路径，不写文件
 
 它只做三件事，全部可重复执行（幂等）：
-    1. 建工作目录（默认 ~/WorkBuddy/BOSS/boss-data）
+    1. 建工作目录（默认 ~/.boss-daily-apply；旧位置存在则沿用）
     2. 把 config/*.json 拷成 <工作目录>/config/*.json，供你自由修改
-    3. 若没有 user_profile.json，从示例拷一份空档案，并提示你填
+    3. 若没有 user_profile.json，从旧版本迁移或从示例拷一份，并提示你填
 
 不会联网、不碰浏览器，装完即可跑 `python scripts/screen.py ...` 验证。
+没装浏览器 / 扩展也能继续用：后面的投递用 `python scripts/ledger.py` 手动记账。
 """
 import argparse
 import json
@@ -91,10 +92,14 @@ def main():
         print("\n⚠️ user_profile.json 读取失败:", e)
 
     print("\n下一步：")
-    print("  1) Chrome 打开并登录 BOSS直聘，确认 Kimi WebBridge 扩展已连接")
-    print("  2) python scripts/env_check.py          # 环境自检")
+    print("  1) 打开浏览器（Chrome/Edge/Brave 都行）并登录 BOSS直聘，确认 WebBridge 扩展已连接")
+    print("     python scripts/browser.py --list        # 装了哪些、在不在跑")
+    print("  2) python scripts/env_check.py             # 浏览器 / 桥 / 登录态自检")
     print("  3) python scripts/supply_probe.py --rounds 10   # 探供给、出配额")
-    print("  4) python scripts/_live_driver.py walk  # 开始逐张走卡")
+    print("  4) python scripts/_live_driver.py walk     # 开始逐张走卡")
+    print("\n装不了扩展 / 没有 Chromium 浏览器也能用：")
+    print("  python scripts/ledger.py add --title ... --company ...   # 手动投，脚本记账")
+    print("  详细降级方案见 references/portability.md")
 
 
 if __name__ == "__main__":

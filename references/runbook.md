@@ -1,7 +1,8 @@
 # 每日投递手册 v3（完整版）
 
 > 这份是 11 步主流程的完整执行细节。`SKILL.md` 是索引，遇到具体分支回这里查。
-> 文中 `$SKILL_DIR` = 技能根目录，`$BOSS_WORKDIR` = 工作目录（默认 `~/WorkBuddy/BOSS/boss-data`）。
+> 文中 `$SKILL_DIR` = 技能根目录，`$BOSS_WORKDIR` = 工作目录（默认 `~/.boss-daily-apply`；
+> 若旧位置 `~/WorkBuddy/BOSS/boss-data` 存在则自动沿用）。
 > 开工会话第一件事就是确定这两个值，切错目录会出现「我设了游标但脚本读不到」。
 
 **v3 相对 v2 的关键变化**：新增 `jobType=1902` 实习筛选通道（第 3 步）、
@@ -16,29 +17,29 @@
 **① 切工作目录**（所有状态文件都在这里）：
 
 ```bash
-cd "$BOSS_WORKDIR"     # 默认 ~/WorkBuddy/BOSS/boss-data
+cd "$BOSS_WORKDIR"     # 默认 ~/.boss-daily-apply（旧位置存在则沿用）
 ```
 
 **② 记基线**：`stream_progress.json` 里只有**新记录**才有 `delivered_at`，旧记录没有。
-所以"今日累计"不能靠数总数，两条一起算：
+所以"今日累计"不能靠数总数：
 
-```python
-import json, os, datetime
-BASE = os.environ.get('BOSS_WORKDIR') or os.path.expanduser('~/WorkBuddy/BOSS/boss-data')
-sp = json.load(open(os.path.join(BASE, 'stream_progress.json'), encoding='utf-8'))
-ws = json.load(open(os.path.join(BASE, 'walk_state.json'), encoding='utf-8'))
-today = datetime.date.today().isoformat()
-print('base_delivered', len(sp['delivered']))
-print('base_rejected', len(ws.get('rejected_jids') or []))
-print('today_so_far', sum(1 for r in sp['delivered'] if (r.get('delivered_at') or '')[:10] == today))
-print('legacy_no_ts', sum(1 for r in sp['delivered'] if not r.get('delivered_at')))
+```bash
+python "$SKILL_DIR/scripts/ledger.py" status
 ```
 
-- 本轮新增投递 = 收尾时 `len(delivered)` − `base_delivered`
-- 本轮新增判否 = 收尾时 `len(rejected_jids)` − `base_rejected`
+```
+工作目录  ~/.boss-daily-apply
+已投递    278 条（其中 61 条带时间戳）
+已判否    422 条
+今日已记  20 条
+          （217 条旧记录无时间戳，不计入今日）
+```
+
+- 本轮新增投递 = 收尾时「已投递」− 开工时「已投递」
+- 本轮新增判否 = 收尾时「已判否」− 开工时「已判否」
 - 合格率 = 新增投递 ÷（新增投递 + 新增判否）
-- 今日累计：**以第 10 步写入的 `daily_log.json` 求和为准**；`today_so_far` 只覆盖加过
-  `delivered_at` 的记录，旧数据算不进去（`legacy_no_ts` 就是这部分，别硬凑）
+- 今日累计：**以第 10 步写入的 `daily_log.json` 求和为准**；「今日已记」只覆盖带
+  `delivered_at` 的记录，旧数据算不进去（那行括注就是这部分，别硬凑）
 
 **③ 命令入口**——全文的 `walk / open / deliver / reject` 都是同一个脚本的子命令：
 
@@ -81,40 +82,39 @@ netstat -ano | findstr 10086
 
 清残留 pid（`~/.kimi-webbridge/daemon.pid`）后重起。
 
-### 2) 看 Chrome
+### 2) 看浏览器
+
+**不要求 Chrome**：Edge（Windows 自带）/ Brave / Vivaldi / Chromium / Opera 都能装 WebBridge。
+Firefox / Safari 装不了扩展，是硬限制。
 
 ```bash
-tasklist //FI "IMAGENAME eq chrome.exe"
+python "$SKILL_DIR/scripts/browser.py" --list      # 装了哪些、在不在跑
+python "$SKILL_DIR/scripts/browser.py" --launch    # 默认挑"正在运行"的那个拉起
+python "$SKILL_DIR/scripts/browser.py" --launch edge
 ```
 
-没开 → **只能用这一种姿势拉起**：
-
-```bash
-# 首选：有 PowerShell 工具就直接执行
-explorer.exe 'C:\Program Files\Google\Chrome\Application\chrome.exe'
-
-# 只有 bash 时用这条等价命令（一样是让 explorer 去拉，不会被会话回收）
-powershell.exe -NoProfile -Command "explorer.exe 'C:\Program Files\Google\Chrome\Application\chrome.exe'"
-```
+没开 → **用 `browser.py --launch`，别自己 spawn**。它按平台走
+`explorer.exe` / `open -a` / `xdg-open`，把进程交给桌面 shell 托管。
 
 启动方式的血泪史（别再试别的）：
 
-- ❌ bash 里直接 `explorer.exe "C:\Program Files\..."`：静默无反应，进程不会出现（实测两次）
+- ❌ bash 里直接 `explorer.exe "..."`：静默无反应，进程不会出现（实测两次）
 - ❌ `cmd //c start "" "chrome.exe"` / `Start-Process`：能起来，但 1~2 分钟内被会话回收、扩展跟着掉
-- ✅ PowerShell 里 `explorer.exe '<chrome.exe 路径>'`：能活，扩展稳定
+- ✅ 走桌面 shell（explorer / open -a / xdg-open）：能活，扩展稳定
 
-开了但扩展不连 → 正常关（`taskkill //IM chrome.exe`，**不要 /F**）后按上面重启一次。
+开了但扩展不连 → 正常关掉浏览器（**不要强杀**）后按上面重启一次。
+Windows 上卸干净可用 `taskkill //IM chrome.exe`（不带 `/F`），Edge 换成 `msedge.exe`。
 
 ### 3) 等 12 秒再判
 
 首次探测常为 false。`/status` 里 `extension_connected` **连续 3 次为 true** 才开工。
-中途掉线（`extension_not_connected`）→ 等 10 秒重探，不行重启 Chrome，属"能自己修"。
+中途掉线（`extension_not_connected`）→ 等 10 秒重探，不行重启浏览器，属"能自己修"。
 
 ### 4) 只有这些才找人（都涉及下载/安装/人肉操作）
 
 - `kimi-webbridge.exe` 不存在，或 `status` 报版本不匹配需要 `upgrade`
-- 扩展没装 / 被禁用 / 被 Chrome 判崩溃停用
-- Chrome 本身没装
+- 扩展没装 / 被禁用 / 被判崩溃停用
+- **没有任何 Chromium 系浏览器**（此时转 `ledger.py` 半自动模式，也别硬装）
 - BOSS 登录态失效要扫码
 - 出现验证码、滑块、人脸核验
 - 上面 1~3 步各试两轮仍然起不来
@@ -390,7 +390,7 @@ python $SKILL_DIR/scripts/supply_probe.py --pages 2 --rounds <本次份数>
 - **A 路（hidden=false）下**：列表空、`walk --more` 连续两次 `grew:false` 且页面没有"到底了"文案
   → 说明结构变了，停手
 - 连续 3 次投递失败
-- 扩展连续掉线，且重启 Chrome 两轮仍连不上
+- 扩展连续掉线，且重启浏览器两轮仍连不上
 
 （`document.hidden` 不在停手条件里——走第 3 步分页兜底；B 路列表只有 15~17 张、
 `grew` 恒为 false 都属正常，不要据此停手。）
@@ -405,22 +405,17 @@ python $SKILL_DIR/scripts/supply_probe.py --pages 2 --rounds <本次份数>
    python $SKILL_DIR/scripts/phase_stream.py --mode report --workdir "$BOSS_WORKDIR"
    ```
 
-   然后用 present_files 打开 `$BOSS_WORKDIR/投递汇总.html`。
+   然后打开 `$BOSS_WORKDIR/投递汇总.html`（能预览 HTML 就预览，
+   否则用系统默认程序打开，或把绝对路径给用户）。
 
 2. 按第 0 步基线算：本轮份数、新增判否、合格率。再记一笔当日台账，这样"今日累计"不用猜：
 
-   ```python
-   import json, os, datetime
-   BASE = os.environ.get('BOSS_WORKDIR') or os.path.expanduser('~/WorkBuddy/BOSS/boss-data')
-   p = os.path.join(BASE, 'daily_log.json')
-   log = json.load(open(p, encoding='utf-8')) if os.path.exists(p) else {}
-   d = datetime.date.today().isoformat()
-   log.setdefault(d, []).append({'n': 本轮份数, 'at': datetime.datetime.now().strftime('%H:%M')})
-   json.dump(log, open(p, 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
-   print('今日累计', sum(x['n'] for x in log[d]))
+   ```bash
+   python "$SKILL_DIR/scripts/ledger.py" daily --n <本轮份数>
    ```
 
-   汇报里的"今日累计"以这个数为准（`delivered_at` 只覆盖加了字段之后的记录，旧数据不能算）。
+   输出会给出今日明细和累计。汇报里的"今日累计"以这个数为准
+   （`delivered_at` 只覆盖加了字段之后的记录，旧数据不能算）。
 
 3. **本流程不启动任何后台服务**（`serve_img.py` 已废弃，不在链路里）；
    也要**清掉本轮自己新建的临时脚本**——只清你自己这次写的（如 `tmp_*.py`）。
