@@ -283,10 +283,12 @@ def step_login(a, deadline_s=240):
             if yes("  页面看起来不像未登录，你确认已经登录好了吗？", True):
                 print("  " + c("✓ 已按你的确认继续", "g"))
                 return True
-        left = int(deadline_s - (time.time() - t0))
+        left = int(max(0, deadline_s - (time.time() - t0)))
+        if left <= 0:
+            break
         print("  … 还没检测到登录（剩 %ds），登录完成后会自动继续" % left, flush=True)
-        time.sleep(12)
-    print("  " + c("· 超时未确认登录。不影响后续：登录后直接开工即可。", "y"))
+        time.sleep(10)
+    print("  " + c("· 超时未确认登录。不影响后续：浏览器里登录后直接开工即可。", "y"))
     return False
 
 
