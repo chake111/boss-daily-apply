@@ -9,7 +9,15 @@
 它只做三件事，全部可重复执行（幂等）：
     1. 建工作目录（默认 ~/.boss-daily-apply；旧位置存在则沿用）
     2. 把 config/*.json 拷成 <工作目录>/config/*.json，供你自由修改
-    3. 若没有 user_profile.json，从旧版本迁移或从示例拷一份，并提示你填
+    3. 若没有 user_profile.json，放一份空模板
+
+关于旧档案
+----------
+不会自动迁移。个人档案里有姓名、学校、项目经历，共用电脑时自动搬过来
+就等于把别人的身份带进你的投递。所以只在检测到旧档案时**提示路径**，
+由你确认「那是我的」之后显式执行：
+
+    python scripts/bootstrap.py --migrate      # 复制过来（已有则跳过，--force 才覆盖）
 
 不会联网、不碰浏览器，装完即可跑 `python scripts/screen.py ...` 验证。
 没装浏览器 / 扩展也能继续用：后面的投递用 `python scripts/ledger.py` 手动记账。
@@ -37,6 +45,8 @@ def _copy(src, dst, force):
 def main():
     ap = argparse.ArgumentParser(description="初始化 BOSS 每日投递工作目录")
     ap.add_argument("--force", action="store_true", help="覆盖已有配置（会丢你的改动）")
+    ap.add_argument("--migrate", action="store_true",
+                    help="把旧版本位置里的个人档案复制到工作目录（确认是自己的再跑）")
     ap.add_argument("--print-config", action="store_true", help="只打印路径摘要")
     a = ap.parse_args()
 
@@ -55,23 +65,46 @@ def main():
         if not os.path.exists(src):
             print("  [跳过]", name, "模板不存在")
             continue
+        # 旧布局把配置直接放在工作目录根下。那里的是用户改过的真货，
+        # 再往 config/ 写一份模板副本会把真货遮住（config/ 优先级更高）。
+        legacy = os.path.join(paths.WORKDIR, name)
+        if os.path.exists(legacy) and not a.force:
+            print("  [沿用] %s  ← 工作目录根下的旧配置，未覆盖" % legacy)
+            continue
         action, dst = _copy(src, os.path.join(cfg_dir, name), a.force)
         print("  [%s] %s" % ("写入" if action == "write" else "保留", dst))
 
     prof = os.path.join(paths.WORKDIR, "user_profile.json")
-    if not os.path.exists(prof):
-        legacy = next((p for p in paths.legacy_profile_candidates() if os.path.exists(p)), "")
-        if legacy:
-            # 从旧版本升级上来：档案里有城市/方向的真实配置，直接搬过来
-            shutil.copyfile(legacy, prof)
-            print("  [迁移] %s  ← 从 %s" % (prof, legacy))
+    legacy_all = [p for p in paths.legacy_profile_candidates()
+                  if os.path.exists(p) and os.path.abspath(p) != os.path.abspath(prof)]
+
+    if a.migrate:
+        # 显式迁移：只在用户明确说"那是我的档案"时才搬。
+        # 静默搬的代价是共用电脑上把别人的姓名/学校/项目带进来，投出去的简历就是错的。
+        if os.path.exists(prof) and not a.force:
+            print("  [跳过] %s 已存在；要覆盖旧档案加 --force" % prof)
+        elif not legacy_all:
+            print("  [跳过] 没找到可迁移的旧档案")
         else:
-            example = os.path.join(paths.BUILTIN_CONFIG_DIR, "user_profile.example.json")
-            if os.path.exists(example):
-                shutil.copyfile(example, prof)
-                print("  [写入] %s  ← 请填写你的城市 / 方向 / 期望薪资" % prof)
-    else:
+            src = legacy_all[0]
+            if os.path.exists(prof):
+                shutil.copyfile(prof, prof + ".bak")
+                print("  [备份] %s.bak" % prof)
+            shutil.copyfile(src, prof)
+            print("  [迁移] %s  ← 从 %s" % (prof, src))
+    elif os.path.exists(prof):
         print("  [保留] %s" % prof)
+    else:
+        example = os.path.join(paths.BUILTIN_CONFIG_DIR, "user_profile.example.json")
+        if os.path.exists(example):
+            shutil.copyfile(example, prof)
+            print("  [写入] %s  ← 空模板，跑 onboard.py 会自动填好" % prof)
+        if legacy_all:
+            print("  " + "!" * 8)
+            print("  发现旧档案：%s" % legacy_all[0])
+            print("  如果那是你自己的，运行：python scripts/bootstrap.py --migrate")
+            print("  不是你的就别动——本向导不会自动搬动别人的个人资料。")
+            print("  " + "!" * 8)
 
     resume_dir = os.path.join(paths.WORKDIR, "resume")
     os.makedirs(resume_dir, exist_ok=True)

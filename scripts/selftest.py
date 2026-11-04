@@ -187,11 +187,35 @@ def main():
         check("首次向导体检模式可用", lambda: _expect(
             run(["scripts/onboard.py", "--check"], wd), "环境可用"))
 
+        print("\n[9] 档案迁移必须显式")
+        sentinel = os.path.join(ROOT, "user_profile.json")
+        saved = None
+        if os.path.exists(sentinel):
+            saved = open(sentinel, encoding="utf-8").read()
+        try:
+            with open(sentinel, "w", encoding="utf-8") as f:
+                json.dump({"name": "SELFTEST-SENTINEL", "target_city": "测试城",
+                           "city_code": "1", "role_summary": "自制哨兵档案"},
+                          f, ensure_ascii=False)
+            wd_m1 = tempfile.mkdtemp(prefix="boss-selftest-mig1-")
+            wd_m2 = tempfile.mkdtemp(prefix="boss-selftest-mig2-")
+            try:
+                check("默认不自动迁移（会提示，但不复制）", lambda: _no_migrate(wd_m1))
+                check("--migrate 显式迁移才复制", lambda: _yes_migrate(wd_m2))
+            finally:
+                shutil.rmtree(wd_m1, ignore_errors=True)
+                shutil.rmtree(wd_m2, ignore_errors=True)
+        finally:
+            if saved is None:
+                os.remove(sentinel)
+            else:
+                open(sentinel, "w", encoding="utf-8").write(saved)
+
         if "--no-browser" not in sys.argv:
-            print("\n[9] CDP 后端：免扩展也能自动点（真起一个 headless 浏览器）")
+            print("\n[10] CDP 后端：免扩展也能自动点（真起一个 headless 浏览器）")
             check("CDP 启动 + 传输层路由 + 点击", lambda: _cdp_roundtrip(wd))
         else:
-            print("\n[9] CDP 后端：已跳过（--no-browser）")
+            print("\n[10] CDP 后端：已跳过（--no-browser）")
     finally:
         shutil.rmtree(wd, ignore_errors=True)
 
@@ -261,6 +285,24 @@ def _cdp_roundtrip(wd):
         cdp.close_browser(port)
         os.environ.pop("BOSS_BACKEND", None)
         os.environ.pop("BOSS_CDP_PORT", None)
+
+
+def _no_migrate(wd):
+    """默认行为：可以提示"发现旧档案"，但不能把内容复制进来。"""
+    out = run(["scripts/bootstrap.py"], wd)
+    if "发现旧档案" not in out:
+        raise AssertionError("没提示旧档案：\n%s" % out[-400:])
+    prof = json.load(open(os.path.join(wd, "user_profile.json"), encoding="utf-8"))
+    if prof.get("name") == "SELFTEST-SENTINEL":
+        raise AssertionError("竟然自动复制了旧档案（共用电脑会串身份）")
+
+
+def _yes_migrate(wd):
+    """显式 --migrate 才复制。"""
+    run(["scripts/bootstrap.py", "--migrate"], wd)
+    prof = json.load(open(os.path.join(wd, "user_profile.json"), encoding="utf-8"))
+    if prof.get("name") != "SELFTEST-SENTINEL":
+        raise AssertionError("--migrate 没有迁移档案")
 
 
 def _json_has(text, key):

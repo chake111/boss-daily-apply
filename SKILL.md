@@ -136,7 +136,7 @@ scripts/
   selftest.py       自检 27 项（含 headless 点击）—— 改完代码先跑它
 references/
   runbook.md        11 步完整执行细节 —— 遇到分支先查这里
-  pitfalls.md       25 条踩坑，照做即可
+  pitfalls.md       26 条踩坑，照做即可
   metrics.md        回复率口径与 A/B 纪律
   judgment.md       判定标准 + 边界案例表
   portability.md    环境适配：没有 Chrome / 不用 WorkBuddy 怎么办

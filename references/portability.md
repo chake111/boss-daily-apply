@@ -163,8 +163,18 @@ python scripts/install.py --list          # 看每个目标装没装、装在哪
                                       ~/WorkBuddy/BOSS/boss-data/   ← 旧默认，存在则自动沿用
 ```
 
-从旧版本升级上来，第一次跑 `bootstrap.py` 会：检测到旧目录就**继续用它**、把旧
-`user_profile.json` 复制过来、旧位置散落的 `greetings.json` / `blacklist.json` 直接命中。
+从旧版本升级上来，第一次跑 `bootstrap.py` 会：检测到旧目录就**继续用它**、旧位置散落的
+`greetings.json` / `blacklist.json` 直接沿用（不会被新模板覆盖）。
+
+**个人档案不会自动迁移。** 档案里有姓名、学校、项目经历——共用电脑时自动搬过来，
+就等于把别人的身份带进你的投递。所以只在检测到旧档案时打印路径提示，由你确认后显式执行：
+
+```bash
+python scripts/bootstrap.py --migrate    # 复制旧档案到工作目录（已存在则跳过，--force 才覆盖）
+```
+
+同理，`paths.profile()` 只在**工作目录**和**同一份安装的技能目录**里找档案，
+不会去读上一代技能包留下的文件。
 
 | 环境变量 | 默认 | 作用 |
 |---|---|---|
@@ -200,7 +210,7 @@ CDP 是协议级能力，不依赖任何平台的专有组件——所以在三�
 ```bash
 git clone https://github.com/chake111/boss-daily-apply.git
 cd boss-daily-apply
-python scripts/selftest.py            # 28 项自检（含一次真浏览器点击）
+python scripts/selftest.py            # 30 项自检（含一次真浏览器点击）
 python scripts/install.py --list      # 你的智能体该装哪
 python scripts/bootstrap.py           # 建工作目录
 python scripts/cdp_client.py --launch # 起浏览器（首次扫码登录一次）

@@ -84,7 +84,7 @@ python scripts/onboard.py --check
 <summary>不想用向导 / 给智能体自动跑</summary>
 
 ```bash
-python scripts/selftest.py                    # 28 项自检，含一次真浏览器点击（--no-browser 跳过）
+python scripts/selftest.py                    # 30 项自检，含一次真浏览器点击（--no-browser 跳过）
 python scripts/install.py --list              # 你的智能体该装哪
 python scripts/install.py --target claude     # 或 workbuddy / cursor / codex / plain
 python scripts/bootstrap.py                   # 只建目录和配置，不装任何东西
@@ -163,7 +163,7 @@ scripts/
 references/
   runbook.md        11 步完整执行细节
   judgment.md       判定标准 + 23 条边界案例
-  pitfalls.md       25 条踩坑（现象 → 根因 → 处置）
+  pitfalls.md       26 条踩坑（现象 → 根因 → 处置）
   metrics.md        回复率口径与 A/B 实验纪律
   portability.md    环境适配：没有 Chrome / 不用 WorkBuddy 怎么办
   dom_structure.md  BOSS 页面选择器实测对照表

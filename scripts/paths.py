@@ -96,12 +96,17 @@ def config(name):
 
 
 def legacy_profile_candidates():
-    """旧版本可能把档案放在哪。用于首次迁移，不参与长期查找。"""
+    """历史上档案可能被放在哪。**只给 --migrate 用，不参与日常查找。**
+
+    为什么单独列出来：个人档案里有姓名、学校、项目经历。共用电脑时，
+    别人的档案要是被"自动发现并采用"，投出去的简历就带着错误的身份。
+    所以这些位置只作为"要不要搬过来"的提示，绝不隐式读取。
+    """
     home = os.path.expanduser("~")
     return [
-        # 老布局：档案和脚本一起放在技能目录
+        # 老布局：档案和脚本一起放在技能目录（同一次安装，相对安全）
         os.path.join(SKILL_DIR, "user_profile.json"),
-        # 上一代技能包（boss-zhipin-deliver）的固定位置
+        # 上一代技能包的固定位置——可能是别人的
         os.path.join(home, ".workbuddy", "skills", "boss-zhipin-deliver", "user_profile.json"),
     ]
 
@@ -109,13 +114,15 @@ def legacy_profile_candidates():
 def profile():
     """个人档案 user_profile.json 的路径（不保证存在）。
 
-    查找顺序：BOSS_PROFILE → <工作目录>/user_profile.json → 旧位置（见上）。
-    旧位置只作为兼容：找到就说明是升级上来的，bootstrap 会提示把它搬到工作目录。
+    查找顺序：BOSS_PROFILE → <工作目录>/user_profile.json → <技能目录>/user_profile.json。
+    **不碰 legacy_profile_candidates() 里的其它位置**——那些要用 bootstrap --migrate
+    显式搬过来才会生效。宁可退化成空档案（onboard 会重新问），也不要静默用别人的。
     """
     p = os.environ.get("BOSS_PROFILE")
     if p:
         return _norm(p)
-    for cand in [os.path.join(WORKDIR, "user_profile.json")] + legacy_profile_candidates():
+    for cand in (os.path.join(WORKDIR, "user_profile.json"),
+                 os.path.join(SKILL_DIR, "user_profile.json")):
         if os.path.exists(cand):
             return cand
     return os.path.join(WORKDIR, "user_profile.json")
