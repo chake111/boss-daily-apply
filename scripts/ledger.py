@@ -68,6 +68,23 @@ def manual_id(company, title):
     return "manual-" + h
 
 
+def _warn_direction(direction):
+    """方向不在白名单只警告不拦。
+
+    手动补录时常见「旧标签」和批量 csv 导入，硬拒会让一份百行台账在第 3 行夭折，
+    反而留下半份数据。警告足够——真正决定话术的是补发那一刻的记录。
+    """
+    d = (direction or "").strip()
+    try:
+        cfg = json.load(open(paths.config("greetings.json"), encoding="utf-8"))
+        allowed = list((cfg.get("direction_map") or {}).keys()) + ["其他", ""]
+    except Exception:
+        return
+    if d not in allowed:
+        print("⚠️ direction「%s」不在白名单里，补发会走 generic 兜底。可选：%s"
+              % (direction, "、".join(x for x in allowed if x)))
+
+
 def cmd_add(a):
     prog = _load(PROGRESS, {"delivered": []})
     rows = prog.setdefault("delivered", [])
@@ -84,6 +101,8 @@ def cmd_add(a):
     if same_company >= 2 and not a.force:
         print("⚠️ 该公司已有 %d 条记录，按「同公司本轮最多 2 个」的规则建议跳过。" % same_company)
         print("   确定要记就用 --force。")
+
+    _warn_direction(a.direction)
 
     rec = {
         "jobId": jid,

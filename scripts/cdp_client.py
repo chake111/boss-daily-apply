@@ -539,6 +539,28 @@ class Backend:
                  "title": t.get("title"), "groupTitle": ""}
                 for t in targets(self.port)]}}
 
+        if action == "bring_to_front":
+            # 后台标签会被 Chromium 降频：渲染暂停、执行上下文时有时无。
+            # CDP 里"切前台"就是 activate 该标签的 target（与 playwright
+            # bring_to_front 等价，供 send_img2 第二标签模式用）。
+            tid = self.owned.get(session)
+            anchor = self.conns.get(session) or next(iter(self.conns.values()), None)
+            if anchor is None:
+                t = page_target(self.port)
+                if not t:
+                    return {"data": {"ok": False}}
+                anchor = CDP(t["webSocketDebuggerUrl"])
+            if not tid:
+                t = page_target(self.port, url_contains="zhipin.com") or page_target(self.port)
+                tid = (t or {}).get("id")
+            if not tid:
+                return {"data": {"ok": False}}
+            try:
+                anchor.send("Target.activateTarget", {"targetId": tid})
+            except CDPError:
+                return {"data": {"ok": False}}
+            return {"data": {"ok": True}}
+
         if action in ("activate_tab", "close_tab"):
             tid = args.get("tabId")
             anchor = self.conns.get(session) or next(iter(self.conns.values()), None)

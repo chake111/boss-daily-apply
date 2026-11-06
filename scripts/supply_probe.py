@@ -170,9 +170,16 @@ def probe(keyword, pages, seen, city, job_type):
     实测教训：首轮某个词返回 p1:0/0 被记成「已挖空」，复测同一词 fresh=11 ——
     那次是加载失败。把失败当挖空，会让配额分配凭空少一个方向，
     而且下一轮还会被告知「别再花时间」。
+
+    另一个实测（2026-11-06）：标签页在后台时，URL 里的 page 参数改了但列表
+    根本不重新拉取，p2 拿到的还是 p1 那 15 张。旧逻辑会把它读成「翻页后
+    fresh=0」→ 提前 break → 结论是「这个词只有 15 张」，凭空砍掉后面的候选。
+    这里比对两页的 jobId 集合，完全相同就标记 SAME，不计入「没货」。
     """
     per_page, fresh_all, total = [], [], 0
     load_failed = False
+    paging_dead = False
+    prev = None
     for page in range(1, pages + 1):
         url = make_url(keyword, city, page, job_type)
         jids = _fetch_page(url)
@@ -187,6 +194,12 @@ def probe(keyword, pages, seen, city, job_type):
                 load_failed = True
                 per_page.append("p1:0/0?")
                 break
+        if page >= 2 and prev is not None and jids and set(jids) == set(prev):
+            # 翻页没换内容：这是前端的锅，不代表这个词没货
+            per_page.append("p%d:SAME" % page)
+            paging_dead = True
+            break
+        prev = jids
         fresh = [x for x in jids if x not in seen]
         fresh_all.extend(fresh)
         total += len(jids)
@@ -195,9 +208,13 @@ def probe(keyword, pages, seen, city, job_type):
             break
         if not fresh and page >= 2:
             break          # 连着一页没新卡就别再翻
+    err = ""
+    if load_failed and not fresh_all:
+        err = "load_failed"
     return {"keyword": keyword, "fresh": len(set(fresh_all)),
             "cards": total, "pages": per_page,
-            "error": "load_failed" if (load_failed and not fresh_all) else ""}
+            "paging_dead": paging_dead,
+            "error": err}
 
 
 def pad(s, width):
@@ -288,6 +305,8 @@ def main():
                     help="求职类型筛选，1902=实习（默认）；传空串则不加筛选")
     ap.add_argument("--city", default="", help="城市编码，默认取 user_profile.city_code")
     ap.add_argument("--reuse", action="store_true", help="不重新探测，直接用现有 supply.json 重算配额")
+    ap.add_argument("--include-exhausted", action="store_true",
+                    help="也探测已被判定挖空的词（默认跳过，把轮次留给还有货的词）")
     a = ap.parse_args()
 
     paths.ensure_workdir()
@@ -313,6 +332,27 @@ def main():
     kws = [k.strip() for k in a.keywords.split(",") if k.strip()] if a.keywords else default_kws
     seen = load_seen() if rows is None else set()
     if rows is None:
+        from scripts import keyword_health
+        # 已经连续两轮挖空的词直接跳过：在死词上重判同样的 15 张卡是纯浪费
+        skip = [] if a.include_exhausted else keyword_health.exhausted_keywords(paths.WORKDIR, kws)
+        if skip:
+            print("跳过 %d 个已挖空的词（--include-exhausted 可强制探测）：%s\n"
+                  % (len(skip), "、".join(skip)), flush=True)
+            kws = [k for k in kws if k not in skip]
+        if not kws:
+            print("所有词都已挖空。换一批宽词，或等平台刷新后再来。\n")
+            # 必须写一份空 plan：runbook 说「投放顺序以 supply.json 的 plan 为准」，
+            # 不写就会让上一轮的旧 plan 冒充今天的（退出码还是 0，没有任何告警）。
+            try:
+                json.dump({"at": time.strftime("%Y-%m-%d %H:%M:%S"), "city": city,
+                           "pages": a.pages, "rounds": a.rounds, "job_type": a.job_type,
+                           "rows": [], "avail": {}, "alloc": {}, "plan": [],
+                           "note": "全部关键词已连续挖空，本轮无 plan"},
+                          open(OUT, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+                print("已写入空 plan 到 %s（避免旧 plan 被当成今天的）\n" % OUT)
+            except Exception as e:
+                print("写 supply.json 失败：%s\n" % e)
+            return
         print("已知投递/判否 %d 条，探测 %d 个词 × %d 页（jobType=%s）\n"
               % (len(seen), len(kws), a.pages, a.job_type or "无"), flush=True)
         rows = []
@@ -320,6 +360,14 @@ def main():
             r = probe(kw, a.pages, seen, city, a.job_type)
             rows.append(r)
             flag = " ⚠️加载失败" if r.get("error") else ""
+            if r.get("paging_dead"):
+                flag += " ⚠️翻页未换内容(只算第1页)"
+            keyword_health.record(paths.WORKDIR, kw, r.get("cards") or 0, r.get("fresh") or 0,
+                                  note="paging_dead" if r.get("paging_dead") else
+                                       (r.get("error") or ""),
+                                  # 加载失败 / 翻页没换内容 = 这一轮没测出可信结果，
+                                  # 只留档，不参与枯竭判定
+                                  ok=not (r.get("error") or r.get("paging_dead")))
             print("%2d. %s [%s] fresh=%-3d %s%s"
                   % (i, pad(kw, 20), pad(kw_dir.get(kw, "其他"), 10), r["fresh"],
                      " ".join(r["pages"]), flag), flush=True)
@@ -341,7 +389,17 @@ def main():
     empty = [r["keyword"] for r in rows if r["fresh"] == 0 and not r.get("error")]
     failed = [r["keyword"] for r in rows if r.get("error")]
     if empty:
-        print("\n已挖空（下轮别再花时间）: " + "、".join(empty))
+        # 单轮 0 新增不等于「这个词废了」：可能是平台这次没刷出新卡。
+        # 连不连跳由 keyword_health 决定（连续 2 轮才判枯竭）。
+        from scripts import keyword_health
+        dead = set(keyword_health.exhausted_keywords(paths.WORKDIR, empty))
+        now_dead = [k for k in empty if k in dead]
+        once = [k for k in empty if k not in dead]
+        if once:
+            print("\n本轮无新增（再空一轮就会自动跳过）: " + "、".join(once))
+        if now_dead:
+            print("\n已连续挖空，下轮自动跳过: " + "、".join(now_dead)
+                  + "（要强制探测加 --include-exhausted）")
     if failed:
         print("\n⚠️ 加载失败（不是挖空，别据此下结论）: " + "、".join(failed))
         print("   这几个词的配额按 0 算了，实际可能有余量——补测一次再定。")

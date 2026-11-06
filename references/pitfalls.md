@@ -1,4 +1,4 @@
-# 踩坑全记录（26 条）
+# 踩坑全记录（42 条）
 
 > 每条都来自实际失败与排查。按「现象 → 根因 → 处置」写，照做即可，不用重新发明一遍。
 > 如果你在这些坑里又踩了一次，说明流程里少了一道校验——补在 `scripts/` 里，别只记在脑子里。
@@ -261,6 +261,278 @@ python scripts/bootstrap.py --migrate     # 确认"那是我的"之后再执行
 
 ---
 
+### 27. 同一家公司投了两个岗位，话术互相串档
+
+**现象**：Anker 的「AI 应用工程师」收到的是大数据赛 / Hadoop 话术，Shopee 的「大数据开发」
+收到的是 Vue 3 前端话术。两条记录各自看起来都对，放在一起就明显错了。
+
+**根因**：补发目标只记公司名（旧版 `load_targets()` 返回字符串列表，不是记录），
+选桶时再拿公司名反查台账；
+台账按 `{公司名: 记录}` 建字典，**后投的那条覆盖先投的**。于是两个岗位都按最后一条选桶。
+
+**处置**：补发按**记录**寻址，不按公司名：
+
+```bash
+python scripts/send_img2.py --job <jobId> --msg --auto-img   # 精确一条
+python scripts/send_img2.py --pending --msg --auto-img       # 只补没补齐的
+```
+
+`pick_greeting(rec)` / `choose_image(rec)` 直接吃投递记录。验收：同一公司两条记录
+`--dry` 必须输出两个不同的桶。
+
+---
+
+### 28. 「有图」被记成「成功」，于是没人发现话术没发
+
+**现象**：`resume_bundle_log.json` 里 21 家全是 `OK`，但事后只有 1 家能证明真的发过文字。
+
+**根因**：两层。① 循环末尾无条件写 `status:"OK"`，不看 `msg` 是 `SENT` 还是 `FAIL`；
+② 批次日志在循环结束后整车覆盖写一次——中途中断、或后来跑一次单家补发，都会把前面那批冲掉。
+
+**处置**：`status` 三态（`OK` / `PARTIAL` / `FAIL`），并把日志改成**每家处理完立即 append**
+到 `greeting_log.jsonl`（带 `img_ok` / `msg_ok`）。中断只丢当前这一家。
+对账认这张表，不认 `img_mode_log`——后者写在 inject 之前，只是"打算发哪张图"。
+
+---
+
+### 29. 未知方向被塞进 AI 文案
+
+**现象**：「计算机专业实习生」这种没有方向信息的通用岗，收到「有个 Next.js 全栈作品…」。
+
+**根因**：`direction` 写了「其他」→ 不在 `direction_map` → 标题打分全 0 → 落 `default`，
+而 default 当时指向 `ai` 桶。两道保险同时失效。
+
+**处置**：`default` 指向 `generic` 桶（一句不含方向主张、放哪个岗都不算错配的话）；
+`direction` 加白名单（`direction_map` 的键 + 「其他」+ 空串），非法值在 `cmd_open` **之前**
+就返回 `BAD_DIRECTION`，避免点完卡片才报错、把游标搞脏。
+
+---
+
+### 30. 报表里「按简历图」永远是 217 条未标注
+
+**现象**：明明有 61 份带 A/B 分组的投递，报表里这两张表还是只有「（未标注）217」。
+
+**根因**：不是没 join（`metrics.load_progress` 早就按公司名合并了 `img_mode_log`），
+而是 `stats.py` 的分组跑在 `base = mature + undated` 上——61 条都还在观察窗内的
+`watching` 里，被排除在分母之外。
+
+**处置**：单列一个「本批」切片（有 `delivered_at` 的行）＋送达漏斗（投递 → 有图 → 有话术）；
+A/B 按 `A:` / `B:` 前缀归一，别按 `A:ai-app` 这种完整 mode 分组。
+
+---
+
+### 31. 话术开头撞上账号默认招呼语 → 所有会话都被判"已发全"
+
+**现象**：补发时每一家都打印 `SKIP 已发全`，`DONE 0/N`，但会话里明明只有一条默认招呼语。
+
+**根因**：判断"这句话我发过没有"用的是**每桶文案的前 6 个字**做指纹，而 `MY_TEXT_JS`
+收集的是会话里我发过的**全部**文字——包括点「立即沟通」时自动发出的那条默认招呼语。
+只要某个桶的开头（比如「2027届本科」）正好也出现在默认招呼语里，`already_msg` 就对
+所有会话恒真。它和空字符串前缀是同一类错，只是更隐蔽：日志显示"已发全"，看起来正常。
+
+**处置**：
+- 每个桶的文案都要用一句**默认招呼语不会有的开头**（「看过岗位要求」「接过大模型API」这类）。
+- `greetings.json` 里填 `own_default_greeting`（账号实际发的那条），
+  `greeting_prefixes()` 检测到重叠会直接打 `WARN`。
+- 改文案后跑 `python scripts/acceptance.py`（第 [2] 节就是专门验这个的，撞车会直接红），
+  再跑一次 `send_img2.py 1 "<公司>" --dry` 确认桶和文案都对，然后才真发。
+
+---
+
+### 32. Playwright 后端连上调试浏览器 → 浏览器整体退出（WorkBuddy 沙箱）
+
+**现象**：在 WorkBuddy 沙箱里跑 `send_img2.py`（后端自动选 playwright），启动约 9 秒后
+调试浏览器整体消失：首次 `Page.evaluate` 报 `Target page, context or browser has been closed`，
+随后全是 `连上的浏览器没有可用上下文`；`cdp_client.py --serve` 在下个 20s 检查周期报
+`端口已消失`。profile 里没有 Crashpad 转储——是**干净的退出**（最后标签被关/进程被收），
+不是崩溃。同样步骤逐条手跑（exec_module 分步诊断）却一切正常，单看代码找不到杀伤点。
+
+**定位**：同一条探针命令做 A/B——`BOSS_BACKEND=cdp`：IMG+MSG 全链路发送成功、浏览器存活；
+`BOSS_BACKEND=playwright`：T+7s 浏览器死。复现 4 次结论稳定：**playwright 拉起的 node
+driver 一接入，浏览器就保不住**（driver 退出/回收时的清理会带走它连的浏览器；普通终端
+环境未必如此，疑似沙箱对 driver 进程的回收方式触发）。
+
+**处置**：
+- `webbridge_client.backend()` 已改为 **cdp 优先**，playwright 只在显式
+  `BOSS_BACKEND=playwright` 时启用；CDP 后端补齐了 `bring_to_front`（= `Target.activateTarget`）。
+- 排障口诀：serve 报"端口已消失"、且日志里第一句 evaluate 就是 "browser has been closed"
+  ——先 `BOSS_BACKEND=cdp` 再说，别去怀疑脚本逻辑（`list_not_ready` 在浏览器死后是必然症状，
+  曾经因此误修过 3 轮）。
+- 探针 / 补发 / 收尾一律建议：`BOSS_BACKEND=cdp python scripts/send_img2.py ... --same-tab`。
+
+---
+
+### 33. 虚拟列表会话：DOM 只有前 40 条，老会话全被判 NOT_FOUND
+
+**现象**：投了 61 家、聊天列表 DOM 只有 40 条；11-03 的老会话逐个 `SKIP NOT_FOUND`，
+但它们明明在列表数据里（`.user-list-content.__vue__.$props.dataSources` 全量 98 条）。
+
+**三个坑**：
+1. 虚拟滚动组件只改 `scrollTop` **不会更新渲染窗口**（`range` 停在 0-39）——
+   必须 `scrollToIndex(idx)` 后手动 `vm.onScroll({target: el})` 把 scroll 事件喂回去。
+2. 长公司名在数据源里是**截断的**（「深圳墨生万物人工...」），全名 indexOf 永远失败；
+   匹配要用多键（全名 / 去「有限公司」/ 前 6 字），比较前先去掉尾部省略号。
+3. `data-rb3` 标记点完**必须清掉**：残留标记会让下一次 `querySelector('[data-rb3]')`
+   命中上一个会话，看起来"定位成功"实际点开了别人（已实测把消息发给错的会话风险拦在验证层）。
+
+**处置**：`send_img2.locate_conv_by_data()` 按数据索引滚动 + 喂事件，`company_keys()` 多键匹配，
+每次定位前清残留标记。另外右侧标题栏有些会话**不显示公司名**（只显示 HR+岗位），
+标题验证要接受「点击前公司键命中 + 标题栏岗位片段一致」。
+
+---
+
+### 34. 两个"看起来活着"的假象：原地刷新与代理 502
+
+1. **同页 navigate 之后聊天记录永久 pre-loading**：`chat-record` 卡在 loading 点点，
+   所有会话的消息区都不渲染（发送注入全部 NOT_SENT）。等再久都没用，唯一办法是
+   **进程级重启浏览器**（cdp_client --serve 重开）。因此：补发中途绝不 navigate 刷新聊天页。
+2. **WorkBuddy 沙箱里 curl 经代理**：连不上时代理返回 502，curl **退出码仍是 0**——
+   `curl ... && echo ALIVE` 会把死端口报成活。存活判断必须看响应体（如含 "Browser"/"Edg"），
+   或者 `curl -f`。
+
+---
+
+### 35. 补发永远动不了积压：`--pending` 先截尾后过滤
+
+**现象**：跑 `5 --pending` 每一批都打印"没有投递记录可补发"，台账里明明还有几十条没补；
+换个 limit 也没用，看起来像"已经全补完了"。
+
+**根因**：`resolve_targets` 原先是 `rows[-limit:]` 取最后 N 条，*之后*才过滤掉已完成的。
+于是 pending 永远只在台账**最新**那 5 条里找；那 5 条一旦补齐，后面每一批都是空集，
+积压永远不动（2026-11-05 实测，50 条一条没补就准备收工）。
+
+**处置**：pending 分支先过滤已完成，`rows[:limit]` 从**最旧**的开始取；`limit=0` 给全部。
+自测里用「10 条台账 + 前 3 条已 OK + limit=2 → 必须返回第 4、5 条」把它钉死
+（旧实现返回第 9、10 条）。
+
+**顺带一个坑**：老台账里有 200+ 条只有 company/title、没有 `delivered_at`。它们排在
+`delivered` 最前面，一旦"从最旧开始"就会先把这些几周前的岗位翻出来发。所以 pending
+默认跳过无投递时间的记录并打印 NOTE，要纳入必须显式 `--include-legacy`。
+
+---
+
+### 36. 同公司两个岗位只差前缀：「【实习】」把两条都命中
+
+**现象**：一家公司两个岗位（Shopee 的「【实习】大数据开发」和「【实习】前端开发」、
+Anker 的「AI应用开发」和「大数据」），补发时定位到隔壁岗位；HR 那边看着像发对了
+（都有图），但证据归错会话。更糟的是标题校验用同一段 4 字前缀，错会话也能判 OK。
+
+**根因**：`title[:4]` 作为片段匹配，`【实习】` 这种招聘标签前缀对同公司多个岗位完全一样；
+匹配循环又是「第一个命中就点」，`fallback` 还会在没命中时直接点公司第一条。
+
+**处置**：
+- `title_probes()`：整串 + 去掉 `【】[]（）()` 里的标签后的主体 + 主体前 6 字（容忍列表截断）。
+- 定位改成**打分**：对每条候选算与 probes 的最长公共子串，取最大分；完全相等记 999。
+- **必须唯一最优**：`best == second` 或 `best < 4` 一律不点，返回 `ambiguous` / `no_title_match`，
+  主循环以 `TARGET_AMBIGUOUS` 停批，改用 `--job <jobId>` 精确寻址——猜一次就可能发错人。
+- 自测用 node 真跑 `_locate_js` 生成的脚本（同公司两岗 fixture）：新逻辑选 idx=1，
+  模拟旧 `title[:4]` 则选 idx=0 且 best==second。
+
+---
+
+### 37. BOSS 改版：`#main .job-detail` 变成 `.job-detail-box`，且 `|| document` 兜底会把点击落到别处
+
+**现象**：所有 `open` 都返回 `panel_ok:false`，日志里 `detail` 却是**上一张岗位**的 JD；
+`deliver` 全部超时失败，按钮始终停在「立即沟通」。
+
+**根因**：BOSS 把右侧详情容器从 `#main .job-detail` 改成 `.job-detail-box`。原代码写成
+`document.querySelector('#main .job-detail') || document`——找不到就退化成 `document`，
+于是「找第一个『立即沟通』按钮」命中的是页面上别处那个，`ka` 属性永远不含目标 jid，
+`panel_ok` **恒假**；点按钮也会点到无关元素。
+
+**处置**：选择器改为 `.job-detail-box` → `#main .job-detail` → `.job-detail` 三级，
+**删掉 `|| document` 兜底**，找不到就明确返回空/`NO_PANEL`，绝不瞎点。
+涉及 `POPUP_STATE_JS`、`CLICK_CHAT_JS`、`VERIFY_DELIVERED_JS`、`_panel_shows_job`、`JD_JS` 五处。
+
+### 38. 后台标签页 `hidden=true`：真实鼠标事件被丢弃，`click` 返回成功但什么也没发生
+
+**现象**：CDP `click()` 返回 `True`、`clicked:true`，但卡片不选中、面板不切换、会话不打开；
+日志里 `panel_ok:false`，紧接着 `SKIP NOT_FOUND` / `标题不符`。
+
+**根因**：标签页在后台（`document.hidden=true`）时 Chromium 会丢弃
+`Input.dispatchMouseEvent` 派发的鼠标事件。JS 的 `el.click()` 走 DOM 事件派发，不受可见性影响。
+另外选中卡片必须点**容器 `li.job-card-box`**，点里面的 `a.job-name` 不触发 SPA 的选中逻辑。
+
+**处置**：
+- 新增 `_js_click_card(jid)`：`a.closest('li').click()`，`open` / `_try_locate_card` 在
+  原生点击后面板仍不对时用它兜底。
+- `send_img2` 打开会话：先 JS `click` 再补一次鼠标 `click`（打开会话幂等，重复点不会发消息）。
+- **判断是否踩坑**：`panel_ok:false` 但 `detail` 有内容且是别的岗位 → 就是这条。
+
+### 39. 聊天会话列表改版：不再显示岗位名，岗位名匹配全线失效
+
+**现象**：补发时 `SKIP 标题不符: 与您进行过沟通的 Boss 都会在左侧列表中显示`，或
+`BATCH_ABORT TARGET_AMBIGUOUS no_title_match`；`--job` 精确寻址也救不回来。
+
+**根因**：`dataSources` 的字段变了——`jobName`/`positionName` 已不存在，`sourceTitle` 为空串，
+`title` 变成了 **HR 角色**（招聘者/招聘hr/资深招聘专家）。`_locate_js` 拿岗位名去打分恒为 0；
+DOM 侧 `.job-name/.source-job/.job-title` 也全部查不到，`text` 退化成整条 innerText
+（含"与您进行过沟通的 Boss 都会在左侧列表中显示"这句提示）。
+
+**处置**：
+- **以 `encryptJobId` 为准**：它就是页面上的 `jobId`，`dataSources` 里逐条都有，精确匹配、零歧义。
+- DOM 标题选择器补 `.name-box,.title-box`（内容是「HR名+公司名+角色」）。
+- 打分全为 0 时不能再依赖 `if(s>bs)`：**首个候选必须先占位**，否则最佳索引恒为 -1 → `notfound`。
+- 公司名唯一命中（`cand===1`）时放行；同公司多会话才需要 jobId，数据源定位后**按下标直点**
+  （会话列表 DOM 顺序与 `dataSources` 一致，前 40 条全渲染）。
+
+---
+
+### 40. `click` 返回 true，但页面纹丝不动——最贵的一类故障
+
+**现象**：`clicked: true`、`panel_ok: false`、`SKIP NOT_FOUND`、`SKIP 标题不符`。
+日志里没有一个错误，全是"正常跳过"，但一整天一份也投不出去。
+
+**根因**：标签页在后台（`document.hidden=true`）时，Chromium 会丢弃
+`Input.dispatchMouseEvent`。`click()` 只在"事件发出去了"时返回 True，不代表点到了。
+调用方信了 True 就一路继续，把"什么都没发生"记成"做过了"。
+
+**处置**：`click_verified(selector, expect_js)` 把「点」和「确认点到了」合成一步：
+先发真实鼠标事件，按 `expect_js` 轮询；不成立就改用 `js_click`（DOM 事件派发，
+不受可见性影响），再轮询。返回值是 `(ok, method)`。
+
+**实证**：2026-11-06 修完后跑真实卡片，`clicked: True | panel_ok: True | method: js`。
+注意 `open` 输出里的键名是 **`click_method`**；而且卡片点击（`click_card`）本来就
+只走 JS，所以它的值是恒定的 `js`——真正的诊断信号在弹窗按钮那条路径上
+（`click_verified` 先试鼠标，失败才转 js）。
+
+### 41. 单个 CSS 选择器就是单点故障：BOSS 改个 class 名，整条链路静默瘫痪
+
+**现象**：所有 `open` 都 `panel_ok:false`，`detail` 里有内容但**是上一张岗位的 JD**。
+
+**根因**：`querySelector('#main .job-detail') || document`——找不到就退化成整个
+document，于是「找第一个立即沟通按钮」命中的是页面上别处那个，校验恒假、点击落错。
+
+**处置**：`scripts/locators.py` 把「目标」和「怎么找到它」解耦。每个目标给一组策略，
+CSS 全失效时还有**结构兜底**（从「立即沟通」按钮往上找第一个够大的块级容器）。
+业务代码只说「我要详情面板」，改版时只补一条选择器。
+
+配套：`env_check.py` 新增「页面结构」一项，开投前就报红，不用等到逐张判卡才发现。
+补选择器的地方是 `scripts/locators.py` 的 `_DETAIL_REF`（`SEL` 数组），不是别处。
+
+**两个后来被交叉验证抓出来的坑**（都会让兜底本身变成故障源）：
+- **结构兜底不能认错容器**：左列表同样够大、同样含「立即沟通」，必须排除
+  「含 ≥2 个岗位链接」的容器，否则会把整列岗位当成详情面板读，AI 拿着整页文本判岗。
+- **保留旧引用必须校验 `isConnected`**：面板被移出 DOM 后，`innerText` 还是上一张岗位的
+  JD、按钮点上去无效——`panel_ok` 反而为真，正好是本节要消灭的那类静默失败。
+
+### 42. 判否记录只用来跳过单张卡，从不反哺搜索策略
+
+**现象**：422 条判否、每轮日志满屏「已判否-跳过」，三个词各 15 张卡走完，
+真正的新候选只有个位数。同一个词今天和前天返回的结果集几乎一样。
+
+**根因**：词表是按方向写死的，探测完只汇报"本轮 fresh 多少"，不记"这个词历史上
+还剩多少货"。于是每天都在死词上做重复劳动。
+
+**处置**：`keyword_health.py` 记录每个词每轮的 `scanned/fresh`，连续两轮 `fresh=0`
+判定枯竭，`supply_probe` 下次直接跳过（`--include-exhausted` 可强制重测，
+`--reset` 清误判）。重新有货会自动解除，不需要人工维护。
+
+**注意**：单轮 0 新增不等于挖空（平台会抖动），所以阈值是 2 轮；
+加载失败（`load_failed`）单独标记，绝不并入枯竭判定。
+
+---
+
 ## 一句话总结
 
 1. 浏览器只有交给桌面 shell（explorer / open -a / xdg-open）拉起的能活。
@@ -289,3 +561,14 @@ python scripts/bootstrap.py --migrate     # 确认"那是我的"之后再执行
 24. CDP 连上却 evaluate 失败 → 连到了浏览器内部页，跳过 `chrome://` / `edge://`（about:blank 可用）。
 25. 浏览器刚启动就消失 → 进程树被宿主回收，用 `--serve` 常驻。
 26. 个人档案不自动迁移 → `--migrate` 显式执行，否则共用电脑会串身份。
+27. 一家两岗按记录寻址，`--job` 才能不串档。
+28. 「有图」≠「成功」，看 `greeting_log` 的三态。
+29. 未知方向走 `generic`，别默认 AI。
+30. 「本批」要单独切片，否则报表看不见今天的投递。
+31. 话术开头别撞默认招呼语，否则永远 SKIP。
+32. WorkBuddy 沙箱里 playwright 后端会带走调试浏览器，默认 cdp；evaluate 第一句就是 "browser has been closed" 先怀疑这条。
+33. 老会话 NOT_FOUND = 虚拟列表只渲染 40 条：按 dataSources 索引滚动并手动喂 onScroll；截断公司名用多键；data-rb3 点完必清。
+34. 补发中途别 navigate 刷新聊天页（消息区永久 pre-loading，只能重启浏览器）；沙箱里 curl 经代理 502 也 exit 0，存活判断看响应体。
+35. 详情容器选择器失效 → `panel_ok` 恒假、点击落到别处；**绝不** `|| document` 兜底。
+36. `hidden=true` 下鼠标事件被丢弃 → JS click 兜底；选卡片点 `li` 容器，别点 `a.job-name`。
+37. 会话列表不再显示岗位名 → 用 `encryptJobId` 精确寻址，别靠岗位名打分。

@@ -37,7 +37,7 @@ Chromium 系浏览器自带 **DevTools 协议（CDP）**，启动时加一个调
 python scripts/cdp_client.py --launch     # 人用：命令立刻返回，浏览器留在桌面上
 python scripts/cdp_client.py --serve      # 智能体用：常驻，防止进程树被宿主回收
 python scripts/cdp_client.py --check      # 确认端口就绪、列出标签页
-python scripts/env_check.py               # 三条自检
+python scripts/env_check.py               # 四条自检
 ```
 
 > **`--serve` 和 `--launch` 的区别很关键**：不少宿主（IDE / 智能体 / 沙箱）会在命令结束时
@@ -214,7 +214,7 @@ python scripts/selftest.py            # 30 项自检（含一次真浏览器点�
 python scripts/install.py --list      # 你的智能体该装哪
 python scripts/bootstrap.py           # 建工作目录
 python scripts/cdp_client.py --launch # 起浏览器（首次扫码登录一次）
-python scripts/env_check.py           # 三条全过就能开工
+python scripts/env_check.py           # 四条全过就能开工
 ```
 
 前两条不通再看 WebBridge；两条都不通才用 `ledger.py`。

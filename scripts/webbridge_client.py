@@ -124,11 +124,16 @@ def _pw_ready():
 
 
 def backend(force=False):
-    """当前该用哪条通道：'webbridge' / 'playwright' / 'cdp' / ''（都没有）。
+    """当前该用哪条通道：'webbridge' / 'cdp' / 'playwright' / ''（都没有）。
 
-    优先级：WebBridge（现成用户在用的扩展）→ Playwright（连同一个调试端口，
-    但点击/等待/上传都用库实现）→ 内置 CDP（既没装库时的兜底）。
+    优先级：内置 CDP → WebBridge（现成用户在用的扩展）→ Playwright（仅显式指定）。
     BOSS_BACKEND 可强制指定，none/off 表示按"无通道"处理（自检和排障用）。
+
+    为什么 Playwright 不再自动选用（2026-11-05 实测，见 pitfalls #32）：
+    在 WorkBuddy 沙箱里，脚本以 playwright 后端连接调试浏览器后，浏览器会在
+    首次 evaluate 前后整体退出（无崩溃转储、serve 报端口消失）——同一条命令
+    BOSS_BACKEND=cdp 则完全正常，A/B 对照复现 4 次。在修出根因之前，playwright
+    只在用户显式 BOSS_BACKEND=playwright 时启用（普通终端环境它仍然是好东西）。
     """
     want = (os.environ.get("BOSS_BACKEND") or "").strip().lower()
     if want in ("none", "off"):
@@ -138,10 +143,14 @@ def backend(force=False):
     now = time.time()
     if not force and _BACKEND["name"] and now - _BACKEND["at"] < 15:
         return _BACKEND["name"]
-    if bridge_alive():
+    if _port_up():
+        # 默认 CDP 优先，避免 WorkBuddy 沙箱里扩展/Playwright 通道的不确定性。
+        # cdp 不要求 _pw_ready()：它覆盖主流程全部动作（evaluate/navigate/
+        # click/list_tabs/activate_tab/close_tab/bring_to_front），且补发链路
+        # （base64 分片注入组 Blob）已实测走通。playwright 见 docstring。
+        name = "cdp"
+    elif bridge_alive():
         name = "webbridge"
-    elif _port_up():
-        name = "playwright" if _pw_ready() else "cdp"
     else:
         name = ""
     _BACKEND.update(name=name, at=now)
@@ -257,6 +266,97 @@ def navigate(url, wait_range=(4, 6), session=SESSION,
 def click(selector, session=SESSION):
     """通过 CSS 选择器点击元素"""
     return api("click", {"selector": selector}, session=session).get("data", {}).get("success", False)
+
+
+def js_click(selector, session=SESSION):
+    """用 DOM 原生 click 点元素，返回是否点到。
+
+    与 click() 的区别：click() 走真实鼠标事件（Input.dispatchMouseEvent），
+    在后台标签页(document.hidden=true)会被 Chromium 丢弃——事件发出去了，
+    页面毫无反应，而调用方拿到的是 True。js_click 走 DOM 事件派发，
+    不受可见性影响，是那种情况下的唯一可行路径。
+    """
+    try:
+        return bool(evaluate(
+            "(function(){var el=document.querySelector(%s);if(!el)return false;"
+            "el.click();return true;})()" % json.dumps(selector), session=session))
+    except Exception:
+        return False
+
+
+def click_verified(selector, expect_js=None, timeout=5.0, poll=0.35, session=SESSION):
+    """点击并确认「真的点到了」，鼠标事件无效时自动改用 JS 点击。
+
+    为什么需要（2026-11-06 实测）：标签页在后台时，click() 返回 True 但页面
+    毫无变化——成功的只是「事件发送」这一步。调用方信了 True 会一路「成功」
+    到底却什么都没发生（当天的表现是所有 open 都 panel_ok:false、所有补发
+    都 SKIP 标题不符，日志里一个错都没有）。
+
+    expect_js: JS 表达式，返回真表示点击已生效。不传则退化为「点击后元素
+    状态是否变化」的弱校验（没有 expect 时只能保证动作发出去了）。
+
+    返回 (ok, method)，method ∈ {"mouse", "js", "none"}，便于日志区分是靠哪条
+    路径成功的——连续出现 "js" 说明当前环境在丢鼠标事件。
+    """
+    def _passes():
+        if not expect_js:
+            return None
+        try:
+            v = str(evaluate(expect_js, session=session)).strip().lower()
+            return v in ("true", "1", "yes")
+        except Exception:
+            return False
+
+    click(selector, session=session)
+    if expect_js is None:
+        return True, "mouse"
+    # 两段共用同一个总预算：鼠标阶段最多花一半，剩下的留给 JS 兜底。
+    # 各给 timeout/2 会让总耗时超出声明的 timeout（实测 5s 配置跑出 6s），
+    # 而且页面在 3s 才生效时，JS 阶段只剩 2.5s，会被判成假失败。
+    deadline = time.time() + timeout
+    mouse_deadline = time.time() + timeout * 0.5
+    while time.time() < mouse_deadline:
+        if _passes():
+            return True, "mouse"
+        time.sleep(poll)
+
+    js_click(selector, session=session)
+    while time.time() < deadline:
+        if _passes():
+            return True, "js"
+        time.sleep(poll)
+    return False, "none"
+
+
+def click_card(jid, expect_js=None, timeout=5.0, session=SESSION):
+    """点岗位卡片容器（li），而不是卡片里的岗位链接。
+
+    2026-11-06 实测：点 `a.job-name` 不会触发 SPA 的选中逻辑，右侧详情不切换；
+    点它最近的 li 才行。这里统一走 JS 点击（DOM 事件不受标签页可见性影响），
+    再按 expect_js 校验面板是否真的切过去了。
+    """
+    from scripts import locators
+    try:
+        r = str(evaluate(locators.click_card_js(jid), session=session) or "")
+    except Exception:
+        return False, "error"
+    if r.startswith("ABSENT"):
+        return False, "absent"
+    if not r.startswith("CLICKED"):
+        # 除了 ABSENT 只认 CLICKED；其他任何回包（空串、异常字符串）都不能当成功
+        return False, "unexpected:" + r[:40]
+    if not expect_js:
+        return True, "js"
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            v = str(evaluate(expect_js, session=session)).strip().lower()
+            if v in ("true", "1", "yes"):
+                return True, "js"
+        except Exception:
+            pass
+        time.sleep(0.4)
+    return False, "clicked_not_switched"
 
 
 def scroll_page(session=SESSION):

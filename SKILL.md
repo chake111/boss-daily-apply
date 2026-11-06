@@ -63,7 +63,7 @@ python "$SKILL_DIR/scripts/cdp_client.py" --serve        # 后台任务，保持
 python "$SKILL_DIR/scripts/env_check.py"
 ```
 
-三项全绿即可开工。有红的先按提示修，别硬上。
+四项全绿即可开工（浏览器 / 自动化通道 / 登录态 / 页面结构）。有红的先按提示修，别硬上。
 
 ---
 
@@ -81,11 +81,10 @@ python "$SKILL_DIR/scripts/env_check.py"
 
 - **任意 Chromium 系浏览器**：Chrome / Edge（Windows 自带）/ Brave / Vivaldi / Chromium / Opera。
   **不要求 Chrome**；Firefox / Safari 没有 CDP，也装不了扩展，是硬限制。
-- **自动化通道，二选一，都能全自动**：
-  - **Playwright**（首选）：连到调试端口上的浏览器，点击/等待/上传都交给库，
-    `pip install playwright` 一行装完（约 39MB，**不下载浏览器内核**）。
-  - **内置 CDP**：不装任何东西也能跑，点击逻辑自己实现，页面改版时可能需要更新。
-  - **WebBridge**：已有 Kimi WebBridge 扩展的话，起服务即可，会被优先使用。
+- **自动化通道**：
+  - **内置 CDP**（默认优先）：不装任何东西也能跑，点击逻辑自己实现，页面改版时可能需要更新。
+  - **Playwright**（仅显式 `BOSS_BACKEND=playwright`）：普通终端可选用；WorkBuddy 沙箱禁用。
+  - **WebBridge**：已有 Kimi WebBridge 扩展时，作为 CDP 不可用后的回退。
   - 三者都在 `webbridge_client` 里做了路由，上层脚本调用方式完全一致。
 - Python 3.9+，只用标准库，无需 `pip install`。
 
@@ -119,9 +118,14 @@ python "$SKILL_DIR/scripts/browser.py" --list     # 装了哪些浏览器、在�
 ```
 scripts/
   _live_driver.py   walk / open / deliver / reject —— 唯一的投递入口
-  supply_probe.py   探供给，按证据强度出配额，写 supply.json
+  locators.py       页面定位器组：详情面板/立即沟通/卡片/会话各给多套查找策略，
+                    改版时只补一条策略，业务代码不动。含结构兜底与页面健康检查
+  keyword_health.py 词表健康：连续两轮挖空的词自动跳过，不再重复扫同一批卡
+  supply_probe.py   探供给，按证据强度出配额，写 supply.json（翻页未换内容会标 SAME）
   screen.py         机械否决（黑名单在 config/blacklist.json）
-  send_img2.py      补发简历图 + 按方向一句话（第二个标签，不打断搜索页）
+  send_img2.py      补发简历图 + 按方向一句话（WorkBuddy 用 CDP + --same-tab；第二标签实验性）
+  daily_close.py    收尾对账：谁还没送简历图 / 谁没发话术（只读，给逐条补发命令）
+  acceptance.py     配置验收：判据在你真实配置下会不会恒真（开投前跑，16 项）
   reply_check.py    扫会话，出「待我动作」台账
   stats.py          回复率报表（Wilson 95% 区间）
   phase_stream.py   收尾生成 投递汇总.html
@@ -133,7 +137,7 @@ scripts/
   install.py        装到各智能体，或输出纯文本用法
   paths.py          路径解析（工作目录 / 配置 / 简历图）
   bootstrap.py      首次安装：建目录、拷配置、检查简历图
-  selftest.py       自检 27 项（含 headless 点击）—— 改完代码先跑它
+  selftest.py       自检 52 项（含定位器 JS、点击兜底、词表健康、headless 点击）
 references/
   runbook.md        11 步完整执行细节 —— 遇到分支先查这里
   pitfalls.md       26 条踩坑，照做即可
@@ -204,8 +208,24 @@ curl -s --noproxy '*' http://127.0.0.1:10086/status
 python "$SKILL_DIR/scripts/browser.py" --list
 ```
 
-`env_check.py` 里「自动化通道」「登录态」都绿了才开工。只有这些才找人：两条通道都起不来、
+`env_check.py` 里「自动化通道」「登录态」「页面结构」三项都绿了才开工。
+「页面结构」是 2026-11-06 加的：它按当前 DOM 检查还能不能找到详情面板、岗位卡片、
+「立即沟通」按钮。BOSS 改一次版，这三样会一起静默失效——日志里只有满屏 SKIP、
+没有任何错误，等逐张判卡才发现已经浪费十几分钟。这项红灯时去 `scripts/locators.py`
+补一条选择器即可，不用改业务代码。只有这些才找人：两条通道都起不来、
 没有任何 Chromium 浏览器、登录态要扫码、出现验证码/滑块/人脸、各试两轮仍不通。
+
+再跑一次**配置验收**（不是环境，是判据本身）：
+
+```bash
+python "$SKILL_DIR/scripts/acceptance.py"
+```
+
+它拿你真实的 `greetings.json` 和真实台账，验证「补发判据不会恒真」——包括
+每桶文案的指纹互不相同、不与账号默认招呼语重叠、同名公司多投不串档、对账只读幂等。
+**16/16 才开投**。为什么单独有这一步：曾出现兜底文案开头撞上默认招呼语，导致
+`already_msg` 恒真、每家都 `SKIP 已发全`，补发永久静默失效，而 `selftest` 全绿、日志也正常。
+`selftest.py` 管代码，`acceptance.py` 管你这份配置和数据。
 
 > **别再自己 spawn 浏览器**：Windows 上 `Start-Process` / `cmd start` 拉起的会在 1~2 分钟内
 > 被会话回收，调试端口和扩展一起掉。统一用 `browser.py` / `cdp_client.py`。
@@ -239,6 +259,17 @@ python "$SKILL_DIR/scripts/supply_probe.py" --pages 2 --rounds <本次份数>
 **供给见底的信号**：`walk --next` 连续 10+ 张都是"已判否-跳过" → 立刻切宽词 1902 通道
 （`前端`→`Java`→`后端`→`React`→`Vue`→`AI`→`全栈`→`Python`，每词先 page=1 再 page=2），
 不要在旧长词表上继续耗。
+
+**词表会自动淘汰**：每轮探测的结果都记进 `keyword_health.json`，连续两轮 fresh=0 的词
+下次开跑直接跳过（日志里会写「跳过 N 个已挖空的词」）。想强制重测某词加
+`--include-exhausted`；误判用 `python scripts/keyword_health.py --reset 词` 清掉。
+为什么需要：判否台账只用来跳过单张卡，从不反哺搜索策略，于是同一个词每天把同样的
+15 张卡重判一遍，新增候选接近个位数——2026-11-06 实测三个词各 15 张，真正的新卡约 8 张。
+
+**翻页会校验是否真的换了内容**：标签页在后台时，URL 里的 page 改了但列表可能不重新拉取，
+第二页拿到的还是第一页那 15 张。旧逻辑会把它读成「翻页后 fresh=0」→ 提前收工，
+凭空砍掉后面的候选。现在比对新旧两页的 jobId 集合，完全相同就标 `p2:SAME`，
+并在输出里写明「翻页未换内容(只算第1页)」——这是前端的锅，不代表这个词没货。
 
 #### 分页导航（B 路与 1902 通道都用这段）
 
@@ -300,22 +331,49 @@ $DRV walk --next
 ### Step 6 · 分批补发简历图 + 一句话
 
 ```bash
-python "$SKILL_DIR/scripts/send_img2.py" 5 --msg          # 每满 5 份跑一次
-python "$SKILL_DIR/scripts/send_img2.py" 2 --msg          # 收尾补剩余
-python "$SKILL_DIR/scripts/send_img2.py" 1 "公司短名" --msg  # 只补某一家
+BOSS_BACKEND=cdp python "$SKILL_DIR/scripts/send_img2.py" 5 --msg --same-tab  # 每满 5 份跑一次
+BOSS_BACKEND=cdp python "$SKILL_DIR/scripts/send_img2.py" 2 --msg --same-tab  # 收尾补剩余
+BOSS_BACKEND=cdp python "$SKILL_DIR/scripts/send_img2.py" 1 "公司短名" --msg --same-tab
+BOSS_BACKEND=cdp python "$SKILL_DIR/scripts/send_img2.py" --job <jobId> --msg --auto-img --same-tab
+BOSS_BACKEND=cdp python "$SKILL_DIR/scripts/send_img2.py" --pending --msg --auto-img --same-tab
+BOSS_BACKEND=cdp python "$SKILL_DIR/scripts/send_img2.py" --pending --include-legacy --msg --auto-img --same-tab
 ```
 
-- 自动用第二个标签（session `boss-img`），搜索页和游标不受影响。
+- **`--pending` 从最旧的积压开始补**（不是台账最新几条），可断点续跑；`--pending` + 数字可以
+  一批批推进。没有 `delivered_at` 的历史记录默认不算积压（会打印 `NOTE 跳过 N 条`），
+  确实要回溯老岗位才加 `--include-legacy`（pitfalls #35）。
+- **同公司多岗位定位不出来时会停批**：输出 `BATCH_ABORT TARGET_AMBIGUOUS`，说明两条会话
+  一样像（例如都叫「【实习】…」）。此时改用 `--job <jobId>` 精确寻址，**不要**靠改公司名重试
+  （pitfalls #36）。
+
+- **在 WorkBuddy 沙箱里跑一律加 `BOSS_BACKEND=cdp` 和 `--same-tab`**：
+  playwright 后端在本沙箱会让调试浏览器整体退出（pitfalls #32）。
+- 第二标签（不传 `--same-tab`，session `boss-img`）**暂停使用 / 实验性**：
+  它可能拿不到登录态并落到 passport 校验页；真实补发不得新建第二标签。
+- 主循环前预检失败会输出 `BATCH_ABORT BROWSER_DEAD / LOGIN_REQUIRED / LIST_NOT_READY`
+  并非零退出；只有真正 `NOT_FOUND` 才是公司级 SKIP。登录/验证出现时不得重试或绕过。
+- **按记录寻址，不按公司名**：同一家投了两个岗位时，用 `--job <jobId>` 才不会串档
+  （按公司反查会拿到后投的那条，AI 岗收到数据岗的话术）。
 - 话术按 `direction` 映射到 `greetings.json` 的桶；**`keyword` 不参与匹配**（那是搜索词，不是岗位属性）。
+  方向没标或标了 `其他` 的走 `generic` 兜底，不会再落到 AI 文案。
 - **成功只认「会话条数变多」**（`IMG OK ... | 2->3 OK`）。`NOT_SENT` 就是没发出去；
   但先看会话列表预览有没有 `[图片]`——后台标签重渲染会让计数读到 0，详情见 `pitfalls.md` #15。
+- 每家处理完立即写一行 `greeting_log.jsonl`（`img_ok` / `msg_ok` / `status` 三态），
+  中途中断也只丢当前这一家。**这张表是唯一的话术证据**，`img_mode_log` 只是选图决策。
 - `SKIP 标题不符` → 等 20 秒重试一次（列表渲染延迟），再不行用短名补。
 
 ### Step 7 · 收尾
 
+先对账，再出汇总页：
+
 ```bash
+python "$SKILL_DIR/scripts/daily_close.py"                # 只读，默认退出码 0
 python "$SKILL_DIR/scripts/phase_stream.py" --mode report --workdir "$BOSS_WORKDIR"
 ```
+
+`daily_close.py` 会列出「投了但没送简历图 / 没发话术」的记录，并给出逐条可复制的
+`send_img2.py --job <jobId>` 命令。**把缺口清单原样贴给用户**，让他决定当场补还是明天补——
+它不是门禁（`--strict` 才会在有缺口时退出 1）。只读、不碰浏览器,重跑结果一致。
 
 然后打开 `$BOSS_WORKDIR/投递汇总.html`：能预览 HTML 的工具就预览，
 否则用系统默认程序打开（`start` / `open` / `xdg-open`），或者直接把绝对路径给用户。

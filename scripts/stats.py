@@ -102,6 +102,14 @@ def main():
     # 无时间戳的 217 条都是 10 月的老投递，早过了观察窗；排除它们等于把唯一
     # 能看的样本扔掉。所以默认并入，但在报表里单列一行、并说明覆盖不全。
     base = mature + (undated if include_legacy else [])
+    # 本批 = 有时间戳的那批。为什么单列：这 61 条全在观察窗内，被 base 排除，
+    # 于是"送达完成率"和"按话术桶"两张表在 base 上永远是空的（旧报表里
+    # 「按简历图」一直显示 217 条未标注，就是这个原因）。
+    batched = [r for r in rows if (r.get("delivered_at") or "")[:10]]
+    # 「有图」= 有选图记录（含 21 条只有 img_mode_log 的旧记录，那是唯一证据）；
+    # 「有话术」只认 greeting_log 里 msg_ok=true —— 有 bucket 不等于字发出去了。
+    with_img = sum(1 for r in batched if r.get("img_mode") or r.get("greeting_img_ok"))
+    with_msg = sum(1 for r in batched if r.get("greeting_msg_ok"))
 
     k = sum(1 for r in base if r.get("company") in replied)
     print("观测窗 %gh" % window)
@@ -111,6 +119,7 @@ def main():
              "%.0f–%.0f%%" % metrics.wilson(sum(1 for r in mature if r.get("company") in replied), len(mature))))
     print("  观察中  %3d 份（投出去不足 %gh，不计入分母）" % (len(watching), window))
     print("  无时间戳 %3d 份（旧记录，老口径，单独列）" % len(undated))
+    print("  本批送达 %3d 份投递 → 有简历图 %d → 有话术 %d" % (len(batched), with_img, with_msg))
     print("  分子来源 %s，命中公司 %d 家" % (src, len(replied)))
     if len(mature) < 30:
         print("  ⚠️ 已过窗样本 %d < 30，回复率还不能当结论用" % len(mature))
@@ -134,6 +143,25 @@ def main():
                                                   metrics.pct(kk, len(rs)),
                                                   "%.0f–%.0f%%" % (lo, hi) if rs else "-"))
     md.append("")
+    md.append("## 送达漏斗（本批：有时间戳的 %d 份）" % len(batched))
+    md.append("")
+    md.append("| 环节 | 份数 | 占比 |")
+    md.append("|---|---|---|")
+    md.append("| 投递 | %d | 100%% |" % len(batched))
+    md.append("| 有简历图 | %d | %s |" % (with_img, metrics.pct(with_img, len(batched))))
+    md.append("| 有话术 | %d | %s |" % (with_msg, metrics.pct(with_msg, len(batched))))
+    md.append("")
+    md.append("> 「有话术」只认 `greeting_log.jsonl` 里 `msg_ok=true` 的事件。"
+              "`img_mode_log` 写在 inject 之前，是「打算发哪张图」，不是送达证据。")
+    md.append("")
+    if batched:
+        md.append(group(batched, replied, lambda r: r.get("greeting_bucket") or "（无话术记录）",
+                        "按话术桶（本批）"))
+        md.append("")
+        md.append(group(batched, replied,
+                        lambda r: (r.get("img_mode") or "（未标注）").split(":")[0],
+                        "按简历图 A/B（本批）"))
+        md.append("")
 
     if base:
         md.append("## 分组（%d 份%s）" % (len(base),

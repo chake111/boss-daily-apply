@@ -18,6 +18,7 @@ PROGRESS = paths.state("stream_progress.json")
 REPLY_LOG = paths.state("reply_log.json")
 EVENTS = paths.state("reply_events.jsonl")
 IMG_MODE_LOG = paths.state("img_mode_log.json")
+GREETING_LOG = paths.state("greeting_log.jsonl")
 
 CITY = ("深圳市", "深圳", "北京市", "北京", "上海市", "上海", "广州市", "广州",
         "杭州市", "杭州", "东莞市", "东莞", "惠州市", "惠州", "成都市", "成都")
@@ -81,11 +82,74 @@ def score(name, text):
     return 0
 
 
-def load_progress(path=PROGRESS):
-    """投递记录 + 简历图模式（A/B 分组依据）。
+def greeting_index(path=None):
+    """jobId / 公司名 → 最近一次「发送」事件（skip 不参与）。
 
-    img_mode 不写回 stream_progress.json（那是投递流程的状态文件，
-    多一个写入方就多一个损坏风险），单独放 img_mode_log.json，这里合并。
+    同一家公司投两个岗位时，公司名这个键会指向最后一条，所以读取端必须
+    **先按 jobId 找，找不到再退回公司名**——反过来就又串档了。
+    """
+    path = path or GREETING_LOG
+    idx = {}
+    if not os.path.exists(path):
+        return idx
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    e = json.loads(line)
+                except Exception:
+                    continue
+                if e.get("event") != "send":
+                    continue
+                for k in (e.get("jobId"), e.get("company")):
+                    if k:
+                        idx[k] = e
+    except Exception:
+        pass
+    return idx
+
+
+def event_for(row, events=None, counts=None):
+    """取这条**记录**对应的事件。
+
+    优先 jobId；只有「这家公司在本批里只出现过一次」时才退回公司名。
+    为什么加这个限制：一家投两个岗位时，按公司名回退会让没发过的那条
+    继承另一条的事件，于是被算成「已完成」永远不再补——和当初的串档是同一类错，
+    只是从"发错文案"变成"漏发还被记成发过"。
+    """
+    events = events if events is not None else greeting_index()
+    jid = (row or {}).get("jobId") or ""
+    if jid and jid in events:
+        return events[jid]
+    c = (row or {}).get("company") or ""
+    if not c:
+        return None
+    if counts is not None and counts.get(c, 0) > 1:
+        return None
+    return events.get(c)
+
+
+def mode_for(row, modes, counts=None):
+    """同理：img_mode 的旧记录是公司名键，多记录公司不猜。"""
+    jid = (row or {}).get("jobId") or ""
+    if jid and jid in modes:
+        return modes[jid]
+    c = (row or {}).get("company") or ""
+    if not c:
+        return None
+    if counts is not None and counts.get(c, 0) > 1:
+        return None
+    return modes.get(c)
+
+
+def load_progress(path=PROGRESS):
+    """投递记录 + 简历图模式（A/B）+ 实际发出的话术。
+
+    这三样都不写回 stream_progress.json（那是投递流程的状态文件，
+    多一个写入方就多一个损坏风险），各自放独立日志，这里合并。
 
     文件不存在时返回空列表而不是抛异常：刚装好的第一天，`reply_check --list`
     和 `stats.py` 都该能正常给出「还没有投递记录」，而不是 traceback。
@@ -103,12 +167,23 @@ def load_progress(path=PROGRESS):
             modes = json.load(open(IMG_MODE_LOG, encoding="utf-8"))
         except Exception:
             modes = {}
+    greets = greeting_index()
+    counts = {}
     for r in rows:
-        if r.get("img_mode"):
-            continue
-        m = modes.get(r.get("company") or "")
-        if m:
+        c = r.get("company") or ""
+        counts[c] = counts.get(c, 0) + 1
+    for r in rows:
+        m = mode_for(r, modes, counts)
+        if m and not r.get("img_mode"):
             r["img_mode"] = m.get("mode")
+        g = event_for(r, greets, counts)
+        if g:
+            r["greeting_bucket"] = g.get("bucket") or ""
+            r["greeting_text"] = g.get("text") or ""
+            r["greeting_status"] = g.get("status") or ""
+            # 分开记：status 是"图字都成"，漏斗要的是"字有没有真的发出去"
+            r["greeting_msg_ok"] = bool(g.get("msg_ok"))
+            r["greeting_img_ok"] = bool(g.get("img_ok"))
     return rows
 
 

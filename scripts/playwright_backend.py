@@ -144,16 +144,24 @@ class Backend:
                 return {"data": {"value": ""}}
 
         if action == "navigate":
+            from urllib.parse import urlsplit
             url = args.get("url", "")
             host = ""
+            want_path = ""
             try:
-                from urllib.parse import urlsplit
-                host = urlsplit(url).netloc.split(":")[0]
+                sp = urlsplit(url)
+                host = sp.netloc.split(":")[0]
+                want_path = (sp.path or "/").rstrip("/")
             except Exception:
                 pass
             # 刚 connect_over_cdp 时，页面句柄要经过一次往返才"热"起来，
             # 第一次 goto 可能返回成功但 URL 还没提交。所以不信任返回值，
-            # 用"落地 URL 是否命中目标域名"当判据，并在短时间内轮询。
+            # 用"落地 URL 是否命中目标"当判据，并在短时间内轮询。
+            #
+            # 判据必须比到**路径**，不能只比域名：原来只判 host in landed，
+            # goto 失败时旧 URL（同一个域名、另一个页面）也会命中，于是
+            # 导航失败被报成 ok=True，上层以为已经在目标页，实际停在原地。
+            # 这类假阳性会让后续的 open/发送动作全落在错的页面上。
             for attempt in (1, 2):
                 page = self._page(session)
                 try:
@@ -167,11 +175,23 @@ class Backend:
                         landed = page.url or ""
                     except Exception:
                         landed = ""
-                    if not host or host in landed:
+                    gs = urlsplit(landed)
+                    same_host = (not host) or gs.netloc.split(":")[0] == host
+                    same_path = (not want_path) or (gs.path or "/").rstrip("/") == want_path
+                    if same_host and same_path:
                         return {"data": {"ok": True}}
                     time.sleep(0.3)
                 self._pages.pop(session, None)      # 换个标签页再试
             return {"data": {"ok": False}}
+
+        if action == "bring_to_front":
+            # 后台标签会被 Chromium 降频：渲染暂停、执行上下文时有时无，
+            # evaluate 间歇性拿到空串。上传和读列表之前必须先把它切到前台。
+            try:
+                self._page(session).bring_to_front()
+                return {"data": {"ok": True}}
+            except Exception:
+                return {"data": {"ok": False}}
 
         if action == "click":
             try:

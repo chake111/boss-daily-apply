@@ -127,7 +127,7 @@ def main():
     print("\n下一步：")
     print("  1) 打开浏览器（Chrome/Edge/Brave 都行）并登录 BOSS直聘，确认 WebBridge 扩展已连接")
     print("     python scripts/browser.py --list        # 装了哪些、在不在跑")
-    print("  2) python scripts/env_check.py             # 浏览器 / 桥 / 登录态自检")
+    print("  2) python scripts/env_check.py             # 浏览器 / 通道 / 登录态 / 页面结构 四项自检")
     print("  3) python scripts/supply_probe.py --rounds 10   # 探供给、出配额")
     print("  4) python scripts/_live_driver.py walk     # 开始逐张走卡")
     print("\n装不了扩展 / 没有 Chromium 浏览器也能用：")

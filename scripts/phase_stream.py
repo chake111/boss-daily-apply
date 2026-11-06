@@ -36,8 +36,11 @@ if SKILL_DIR not in sys.path:
 from scripts.webbridge_client import (
     SESSION, api, evaluate, extract_jobs, detect_page_anomaly,
     ProgressManager, parse_salary_max, wait_for_feedback, AbortScriptError,
-    navigate, snapshot_page, click,
+    navigate, snapshot_page, click, click_verified, click_card, js_click,
 )
+# 页面定位统一走 locators：改版时只补一条策略，这里不用动。
+from scripts import locators as _loc
+_DETAIL_REF = _loc._DETAIL_REF
 from scripts.config_v3 import load_profile
 from scripts.env_check import check_env
 
@@ -86,8 +89,16 @@ def scroll_jobs_list(session=SESSION, times=1):
 JD_JS = r"""
 (function(){
     function grab(sel){ var el=document.querySelector(sel); return el? el.innerText.trim(): null; }
-    var detail = grab('#main .job-detail') || grab('.job-detail') || grab('.detail-content')
-                 || grab('.job-detail-box') || grab('div.detail-content');
+    // 优先用已确认过的面板引用（locators 挂的），避免这里再写一套选择器：
+    // 两处选择器一旦不同步，就会出现「校验用的是新容器、读 JD 用的是旧容器」
+    var detail = null;
+    if (window.__bossDetail && window.__bossDetail.isConnected) {
+        detail = (window.__bossDetail.innerText || '').trim() || null;
+    }
+    if (!detail) {
+        detail = grab('.job-detail-box') || grab('#main .job-detail') || grab('.job-detail')
+                 || grab('.detail-content') || grab('div.detail-content');
+    }
     if (detail) return '=== JD面板 ===\n' + detail;
     var main = document.querySelector('#main');
     if (main){ var list = main.querySelector('.job-list'); if (list) list.remove();
@@ -137,6 +148,7 @@ function _ovScan(){ var out=[]; var all=document.querySelectorAll('*');
 
 POPUP_STATE_JS = OVERLAY_SCAN_JS + r"""
 (function(){
+    __BOSS_DETAIL_REF__
     var out={};
     var gb = document.querySelector('.greet-boss-container')||document.querySelector('.greet-boss-dialog');
     out.greet_open = !!(gb && _ovVis(gb));
@@ -152,14 +164,14 @@ POPUP_STATE_JS = OVERLAY_SCAN_JS + r"""
                  '达到上限','已达上限','今日沟通次数','沟通次数已','今日已向'];
     out.body_has_limit=false; out.limit_phrase='';
     for(var k=0;k<limitKw.length;k++){ if(bodyTxt.indexOf(limitKw[k])>=0){ out.body_has_limit=true; out.limit_phrase=limitKw[k]; break; } }
-    var box=document.querySelector('#main .job-detail')||document;
-    var els=box.querySelectorAll('button,a');
+    var box=window.__bossDetail||null;
+    var els=box?box.querySelectorAll('button,a'):[];
     for(var i=0;i<els.length;i++){var t=(els[i].textContent||'').trim();
         if(t.indexOf('沟通')>=0||t.indexOf('送达')>=0){out.btn=t;break;}}
     out.overlays=overlays;
     return JSON.stringify(out);
 })()
-"""
+""".replace("__BOSS_DETAIL_REF__", _DETAIL_REF)
 
 VISIBLE_OVERLAYS_JS = OVERLAY_SCAN_JS + r"""
 (function(){
@@ -208,14 +220,20 @@ def read_popup_type(session=SESSION):
     return "unknown"
 
 
-def click_popup_button(button_text, session=SESSION):
-    """原生点击弹窗内文字匹配的按钮（WebBridge 真实鼠标点击，比合成 .click() 可靠）。
+def click_popup_button(button_text, session=SESSION, expect_gone=True):
+    """点击弹窗内文字匹配的按钮，并确认弹窗真的关掉了。
 
     匹配严格化（修复点错/点空隐患）：
       - 仅限 button / a 元素——弹窗按钮都是真按钮或链接；外层 div/span 的 textContent
         也包含按钮文字，若命中容器会点到"空壳"导致按钮没真正触发。
       - 优先【精确匹配】可见文字；无精确匹配才退回【包含匹配】，且只对叶子节点
         (children.length===0) 匹配，坚决避免命中包裹容器。
+
+    为什么会校验「关掉了」（2026-11-06 交叉验证）：
+      这里原来只有真实鼠标点击 + `sleep 1.5`。标签页在后台时鼠标事件会被丢弃，
+      点不动却返回 success，弹窗留在原地；下一张卡的卡片点击被遮罩挡住 →
+      panel_ok:false → 连锁失败，而第一张在日志里记的是「投递成功」。
+      把确认标准从「点了」改成「弹窗消失了」，这类连锁才有机会被发现。
     """
     tag = evaluate(r"""(function(){
         var target=%s;
@@ -229,11 +247,20 @@ def click_popup_button(button_text, session=SESSION):
         return 'NO_BTN';
     })()""" % json.dumps(button_text))
     if tag != 'tagged':
-        return 'NO_BTN:'+button_text
-    ok = click('#__popbtn__')
+        return 'NO_BTN:' + button_text
+
+    # 鼠标点不动就换 JS 点：弹窗按钮和卡片一样，后台标签页下只有 DOM 点击可靠
+    ok, _method = click_verified(
+        '#__popbtn__',
+        expect_js="" if not expect_gone else
+        "(function(){return !document.getElementById('__popbtn__')"
+        "||document.getElementById('__popbtn__').offsetParent===null;})()",
+        timeout=4.0, session=session)
     evaluate(r"(function(){var e=document.getElementById('__popbtn__'); if(e) e.removeAttribute('id');})()")
-    time.sleep(1.5)
-    return ('CLICKED:'+button_text) if ok else 'CLICK_FAIL'
+    time.sleep(1.0)
+    if not ok:
+        return 'CLICK_FAIL'
+    return 'CLICKED:' + button_text
 
 
 def safe_close_popup(session=SESSION):
@@ -296,33 +323,20 @@ def auto_handle_popups(session, max_rounds=6):
     return json.loads(evaluate(POPUP_STATE_JS) or "{}"), "forced", last_type
 
 
-CLICK_CHAT_JS = r"""
-(function(){
-    var box = document.querySelector('#main .job-detail') || document;
-    var els = box.querySelectorAll('button, a');
-    for (var i=0;i<els.length;i++){
-        var t=(els[i].textContent||'').trim();
-        if (t==='立即沟通'){ els[i].click(); return 'CLICKED:'+els[i].tagName; }
-    }
-    return 'NO_BTN';
-})()
-"""
+def CLICK_CHAT_JS():
+    """点详情面板内的「立即沟通」。定位与禁用态判断都交给 locators。
 
-VERIFY_DELIVERED_JS = r"""
-(function(){
-    var box = document.querySelector('#main .job-detail') || document;
-    var els = box.querySelectorAll('button,a');
-    var btnText = '';
-    for (var i=0;i<els.length;i++){
-        var t=(els[i].textContent||'').trim();
-        if (t.indexOf('沟通')>=0 || t.indexOf('送达')>=0){ btnText=t; break; }
-    }
-    var body = (document.body.innerText||'');
-    var hasDelivery = body.indexOf('[送达]') >= 0 || body.indexOf('已送达') >= 0;
-    var delivered = (btnText && btnText !== '立即沟通' && btnText.indexOf('立即') < 0) || hasDelivery;
-    return JSON.stringify({delivered:delivered, btn:btnText, hasDelivery:hasDelivery});
-})()
-"""
+    返回 'CLICKED:panel' / 'CLICKED:global' / 'DISABLED' / 'NO_BTN'。
+    DISABLED 是真实状态（岗位已停止接收沟通），调用方据此跳过而不是空等超时。
+    """
+    from scripts import locators
+    return locators.click_chat_js()
+
+
+def VERIFY_DELIVERED_JS():
+    """投递后回读面板按钮与送达标记。"""
+    from scripts import locators
+    return locators.delivered_state_js()
 
 
 def _feedback(label, session=SESSION):
@@ -354,6 +368,20 @@ def _ensure_recommend(session=SESSION):
                  label="工作页")
         time.sleep(1)
     return True
+
+
+def _js_click_card(jid, session=SESSION):
+    """用 JS 原生 click 点卡片容器（li.job-card-box），返回是否点到。
+
+    BOSS 的选中逻辑绑在卡片容器上，点里面的 a.job-name 不会切换右侧详情；
+    且标签页在后台时真实鼠标事件会被 Chromium 丢弃，只有 JS 点击稳定生效。
+    """
+    from scripts import locators
+    try:
+        r = str(evaluate(locators.click_card_js(jid), session) or "")
+        return r.startswith("CLICKED")
+    except Exception:
+        return False
 
 
 def _select_card_on_recommend(jid, session=SESSION, max_scroll=10):
@@ -396,13 +424,8 @@ def _panel_shows_job(jid, title, session=SESSION):
     ⚠️ 严禁用 `title in document.body.innerText` 兜底——左侧列表本就罗列所有岗位标题，
     该判断永远为真，会掩盖'面板没切到目标岗'的脱钩，导致向错误岗位投递却记成成功。
     """
-    ka = evaluate(r"""(function(){
-        var box=document.querySelector('#main .job-detail')||document;
-        var els=box.querySelectorAll('button,a');
-        for(var i=0;i<els.length;i++){ var t=(els[i].textContent||'').trim();
-            if(t==='立即沟通'){ return els[i].getAttribute('ka')||''; } }
-        return '';
-    })()""")
+    from scripts import locators
+    ka = evaluate(locators.panel_ka_js())
     if ka and jid and jid in ka:
         return True
     return False
@@ -428,30 +451,43 @@ def card_exists(jid, session=SESSION):
     return str(r).strip().lower() in ("true", "1", "yes")
 
 
-def _try_locate_card(jid, title, session=SESSION, max_rounds=6):
+def _try_locate_card(jid, title, session=SESSION, max_rounds=3):
     """在【当前已导航到的工作页】上定位并选中目标卡片（含滚动加载更多）。
 
     返回:
       - 'ok'     : 已点击且右侧面板确已切到目标岗（可继续点'立即沟通'）
       - 'absent' : 滚动加载后卡片仍不在 DOM（该页确实没有此岗 → 应跳过，不中止整批）
       - 'timing' : 卡片在 DOM 但面板始终未切换（SPA 时序异常 → 为安全计也按跳过处理）
+
+    点击与校验合成一步（click_card 收 expect）：原先是「鼠标点 → 单独校验 →
+    失败再 JS 兜底」三段式，任何一段脱钩都只能靠调用方自己发现，而调用方通常
+    只看返回值。现在只有「面板真的切到目标岗」才算 ok。
+
+    已知限制：面板若停在「已沟通过」的岗位，按钮文案是「继续沟通」而不是
+    「立即沟通」，ka 取不到 → 判 false。这种情况会走完 max_rounds 后按 timing
+    跳过——不投错人，但要白等几轮。max_rounds 从 6 降到 3 就是为了少等这一会。
+
+    滚动改为最多 3 次：原来只滚一次就判 absent，懒加载慢的时候会把
+    「还没加载完」误判成「该页没有此卡」。
     """
+    from scripts import locators
+    expect = locators.panel_shows_job_js(jid)
     for _r in range(max_rounds):
         if not card_exists(jid, session):
-            # 卡片不在当前 DOM → 滚动加载更多后重试
-            scroll_jobs_list(session=session)
-            time.sleep(1.3)
-            if not card_exists(jid, session):
-                # 多次滚动后仍无 → 认定该页无此卡
+            still_absent = True
+            for _s in range(3):
+                scroll_jobs_list(session=session)
+                time.sleep(1.3)
+                if card_exists(jid, session):
+                    still_absent = False
+                    break
+            if still_absent:
                 return "absent"
             continue
-        ok_sel = _select_card_on_recommend(jid, session=session)
-        if not ok_sel:
-            time.sleep(1.0)
-            continue
-        if _panel_shows_job(jid, title, session=session):
+        ok, _method = click_card(jid, expect_js=expect, timeout=4.0, session=session)
+        if ok:
             return "ok"
-        time.sleep(1.2)  # 面板未切换 → 等 SPA 渲染后重试
+        time.sleep(1.0)  # 面板未切换 → 等 SPA 渲染后重试
     return "timing" if card_exists(jid, session) else "absent"
 
 
@@ -474,13 +510,31 @@ def deliver_click(job, session=SESSION, auto=True):
     _ensure_recommend(session)
     res = _try_locate_card(jid, title, session=session)
     if res != "ok":
-        # 当前来源页未找到该卡（BOSS 搜索结果动态变化，卡片可能已不在 DOM）。
-        return {"not_found": True, "jid": jid,
+        if res == "timing":
+            # 卡片在、但面板没切过去。原因文案要如实区分，否则排障会往错的方向走
+            # （以前这里一律说「未找到」，实际是卡在时序或已沟通过的岗）。
+            return {"delivered_ok": False, "timing": True, "jid": jid,
+                    "reason": "卡片在 DOM 里，但右侧面板始终没切到目标岗"
+                              "（SPA 时序异常，或该岗已沟通过、按钮变成「继续沟通」）"}
+        # 当前来源页确实没有这张卡（BOSS 搜索结果动态变化）。
+        return {"delivered_ok": False, "not_found": True, "jid": jid,
                 "reason": f"卡片[{jid}]({title})在当前来源页未找到（BOSS搜索结果动态变化），交由上层决定是否回退推荐页"}
     _feedback(f"已选中卡片[{jid}]", session)
     # 2) 点'立即沟通'
+    # 返回值是状态判断依据，不是装饰：岗已停招(DISABLED)时干等 15 秒超时，
+    # 会被记成一次「投递失败」，连着三张就触发整批停手——把一个正常跳过
+    # 升级成了误判停批。
     print(f"[stream] 点击'立即沟通'：{job.get('title')}")
-    r = evaluate(CLICK_CHAT_JS)
+    r = str(evaluate(CLICK_CHAT_JS()) or "")
+    if r == "DISABLED":
+        return {"delivered_ok": False, "skipped": True, "reason": "chat_disabled",
+                "note": "岗位已停止接收沟通（按钮 is-disabled）"}
+    if r == "NO_PANEL":
+        return {"delivered_ok": False, "not_found": True, "reason": "no_detail_panel",
+                "note": "找不到右侧详情面板，停手不瞎点"}
+    if r == "NO_BTN":
+        return {"delivered_ok": False, "not_found": True, "reason": "no_chat_button",
+                "note": "面板里没有『立即沟通』按钮（可能已沟通过，显示为继续沟通）"}
     time.sleep(1.5)
     _feedback("已点立即沟通", session)
     is_anom, detail = detect_page_anomaly(allow_login_wall=False, check_blank=False)
@@ -538,7 +592,7 @@ def deliver_click(job, session=SESSION, auto=True):
 
 def verify_delivered(session=SESSION):
     try:
-        d = json.loads(evaluate(VERIFY_DELIVERED_JS) or "{}")
+        d = json.loads(evaluate(VERIFY_DELIVERED_JS()) or "{}")
         ok = d.get("delivered", False)
         detail = f"btn={d.get('btn','')} delivery={d.get('hasDelivery',False)}"
     except Exception:
@@ -607,136 +661,426 @@ def run_verify(workdir, session=SESSION):
 # 收尾闭环：投递成果汇报 + 打赏（二合一自包含 HTML）
 # ───────────────────────────────────────────────────────────
 def write_summary_page(workdir, profile=None):
-    """【收尾闭环】生成本轮「投递成果汇报」自包含 HTML。
+    """【收尾闭环】生成「投递台账」自包含 HTML。
 
-    读取 workdir/stream_progress.json 中已投递记录，按 direction 分组，
-    输出 投递汇总.html（单文件，无外链）。若技能目录 assets/ 下放了赞赏码图片，
-    会额外渲染一块打赏区；公开仓库不附带任何收款码，clone 下来默认没有这一块。
+    读三份状态文件，各给一栏真实信息，不混成一个大数字：
+      stream_progress.json  delivered 明细（含 delivered_at / direction / keyword）
+      daily_log.json        每日份数，「今日」的权威口径
+      greeting_log.jsonl    每条的补发结果（img_ok / msg_ok），补发状态只认这里
+      pending_actions.json  HR 有回复待我动作的台账，只取未 resolved 的
 
-    方向分组依据：每条投递记录自带 direction 字段（deliver 第5参数写入）；
-    缺失时回退 industry → '其他'，保证历史数据也能正常出页。
+    设计取向：这是一份可核对的台账，不是庆祝海报。首屏先回答「今天投了什么、
+    还欠什么、谁在等我」，历史累计退到后面。老记录没有 delivered_at，一律归入
+    历史，绝不并进「今日」——否则 283 条累计会被读成「今天投了 283 份」。
+
+    若技能目录 assets/ 下放了赞赏码图片，额外渲染一块打赏区；公开仓库不带收款码。
     """
-    import base64, re, datetime
+    import base64, re, datetime, html as _h
+
     prog = os.path.join(workdir, "stream_progress.json")
     if not os.path.exists(prog):
         return None
-    with open(prog, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    delivered = data.get("delivered", [])
+    try:
+        with open(prog, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return None
+    delivered = data.get("delivered", []) or []
+
+    def _read_json(path, default):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return default
+
+    # ── 今日口径：以 daily_log.json 的最后日期为准；明细按 delivered_at 归日 ──
+    daily = _read_json(os.path.join(workdir, "daily_log.json"), {})
+    today = max(daily.keys()) if isinstance(daily, dict) and daily else ""
+    if not today:
+        stamps = [str(j.get("delivered_at") or "")[:10] for j in delivered]
+        stamps = [s for s in stamps if s]
+        today = max(stamps) if stamps else ""
+    today_rows = [j for j in delivered if today and str(j.get("delivered_at") or "")[:10] == today]
+    today_rows.sort(key=lambda j: str(j.get("delivered_at") or ""), reverse=True)
+    daily_n = 0
+    if isinstance(daily, dict) and today:
+        entries = daily.get(today) or []
+        if isinstance(entries, list):
+            for e in entries:
+                try:
+                    daily_n += int(e.get("n") or 0)
+                except Exception:
+                    pass
+    today_n = len(today_rows) if today_rows else daily_n
+    today_ids = {str(j.get("jobId") or "") for j in today_rows}
+    hist = [j for j in delivered if str(j.get("jobId") or "") not in today_ids]
+    total = len(delivered)
+
+    # ── 补发状态：只认 greeting_log.jsonl 的 send 事件 ──
+    gstat = {}
+    gl = os.path.join(workdir, "greeting_log.jsonl")
+    if os.path.exists(gl):
+        try:
+            with open(gl, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except Exception:
+                        continue
+                    if rec.get("event") != "send":
+                        continue
+                    jid = str(rec.get("jobId") or "")
+                    if not jid:
+                        continue
+                    st = gstat.setdefault(jid, {"img": False, "msg": False})
+                    st["img"] = st["img"] or bool(rec.get("img_ok"))
+                    st["msg"] = st["msg"] or bool(rec.get("msg_ok"))
+        except Exception:
+            pass
+
+    def send_state(j):
+        """返回 (状态类, 文案)。老记录既无投递时间也无补发留痕时文案为空，
+        模板据此不渲染状态——一排「—」只是噪音，对核对没有帮助。"""
+        st = gstat.get(str(j.get("jobId") or ""))
+        if not st:
+            return ("todo", "待补") if j.get("delivered_at") else ("none", "")
+        if st["img"] and st["msg"]:
+            return ("ok", "图+话术已发")
+        if st["img"]:
+            return ("half", "仅图")
+        if st["msg"]:
+            return ("half", "仅话术")
+        return ("todo", "待补")
+
+    def st_html(kind, label):
+        return f'<span class="st st--{kind}">{label}</span>' if label else ""
+
+    # ── 待我动作：pending_actions 里未 resolved 的 ──
+    pend = []
+    pa = _read_json(os.path.join(workdir, "pending_actions.json"), [])
+    if isinstance(pa, list):
+        pend = [x for x in pa if isinstance(x, dict) and str(x.get("status") or "") != "resolved"]
+    pend.sort(key=lambda x: str(x.get("last_seen") or ""), reverse=True)
 
     def dir_of(j):
         return (j.get("direction") or j.get("industry") or "其他").strip() or "其他"
 
-    groups = {}
-    for j in delivered:
-        groups.setdefault(dir_of(j), []).append(j)
-    order = sorted(groups.keys(), key=lambda c: (-len(groups[c]), c))  # 多者在前
+    def sal_num(s):
+        """把「200-250元/天」「6-8K」折成月薪 K，仅用于和 min_salary_k 比。"""
+        s = s or ""
+        m = re.search(r"(\d+)\s*-\s*(\d+)\s*[Kk]", s)
+        if m:
+            return float(m.group(1))
+        m = re.search(r"(\d+)\s*-\s*(\d+)\s*元\s*/\s*天", s)
+        if m:
+            return float(m.group(1)) * 21 / 1000.0
+        return 0.0
 
-    def sal_low(s):
-        m = re.search(r"(\d+)-(\d+)K", s or "")
-        return int(m.group(1)) if m else 0
-
-    total = len(delivered)
     prof = profile or {}
     floor = prof.get("min_salary_k")
     city = prof.get("target_city") or "—"
-    low = [j for j in delivered if floor and sal_low(j.get("salary", "")) < int(floor)] if floor else []
+    low = [j for j in delivered if floor and 0 < sal_num(j.get("salary", "")) < float(floor)]
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    floor_txt = f"{floor}K" if floor else "不限"
 
-    rows_html = []
-    for cat in order:
-        items = groups[cat]
-        rows_html.append(f'<h2 class="cat">{cat} <span class="cnt">×{len(items)}</span></h2>')
-        rows_html.append('<table><thead><tr><th>#</th><th>岗位</th><th>公司</th><th>薪资</th><th>行业</th></tr></thead><tbody>')
-        for idx, j in enumerate(items, 1):
-            rows_html.append(
-                f"<tr><td>{idx}</td><td>{j.get('title','')}</td><td>{j.get('company','')}</td>"
-                f"<td>{j.get('salary','')}</td><td>{j.get('industry','')}</td></tr>"
+    sent_ok_n = sum(1 for j in today_rows if send_state(j)[0] == "ok")
+
+    # 今日方向分布并进区块副标题：明细行里再单独列一次方向，会与岗位名重复
+    # （「AI全栈开发」+「AI应用开发」连读像两个岗位名），信息密度也浪费。
+    today_dirs = {}
+    for j in today_rows:
+        d = dir_of(j)
+        today_dirs[d] = today_dirs.get(d, 0) + 1
+    dir_mix = " · ".join(f"{k} {v}" for k, v in
+                         sorted(today_dirs.items(), key=lambda kv: (-kv[1], kv[0])))
+    today_sub_bits = []
+    if today_rows:
+        today_sub_bits.append(f"图+话术 {sent_ok_n}/{today_n} 已发")
+    if dir_mix:
+        today_sub_bits.append(dir_mix)
+    today_sub = " · ".join(today_sub_bits)
+
+    # ── 今日列表 ──
+    if today_rows:
+        rows = []
+        for j in today_rows:
+            kind, label = send_state(j)
+            rows.append(
+                '<li class="row">'
+                '<div class="row__main">'
+                f'<span class="row__co">{_h.escape(str(j.get("company") or "—"))}</span>'
+                f'<span class="row__job">{_h.escape(str(j.get("title") or ""))}</span>'
+                '</div>'
+                '<div class="row__side">'
+                f'<span class="row__sal">{_h.escape(str(j.get("salary") or "面议"))}</span>'
+                f'{st_html(kind, label)}'
+                '</div>'
+                '</li>'
             )
-        rows_html.append("</tbody></table>")
+        today_html = '<ul class="rows">' + "".join(rows) + "</ul>"
+    else:
+        today_html = '<p class="empty">今天还没有投递记录。</p>'
 
-    cats_summary = "".join(f"<span class='pill'>{c}×{len(groups[c])}</span>" for c in order)
+    # ── 待办 ──
+    if pend:
+        items = []
+        for x in pend:
+            raw_kind = str(x.get("kind") or "待处理")
+            # 「对方说话」只是 HR 来了消息，不是明确的动作要求，用中性色；蓝只留给要你动手的类型
+            kind_cls = " is-passive" if raw_kind == "对方说话" else ""
+            txt = str(x.get("text") or "").replace("\n", " ").strip()
+            if len(txt) > 90:
+                txt = txt[:90] + "…"
+            seen = str(x.get("last_seen") or "")[5:16]
+            items.append(
+                '<li class="todo">'
+                f'<div class="todo__hd"><span class="todo__co">{_h.escape(str(x.get("company") or "—"))}</span>'
+                f'<span class="todo__kind{kind_cls}">{_h.escape(raw_kind)}</span>'
+                f'<span class="todo__when">{_h.escape(seen)}</span></div>'
+                f'<p class="todo__text">“{_h.escape(txt)}”</p>'
+                '</li>'
+            )
+        pend_html = '<ul class="todos">' + "".join(items) + "</ul>"
+    else:
+        pend_html = '<p class="empty">没有等你回复的消息。</p>'
 
+    # ── 历史累计：按方向分组，组内新的在前 ──
+    groups = {}
+    for j in hist:
+        groups.setdefault(dir_of(j), []).append(j)
+    order = sorted(groups.keys(), key=lambda c: (-len(groups[c]), c))
+    # 老台账既没有投递时间也没有补发留痕——按「组」决定列：某一组里一行都没有该字段，
+    # 就不给这一组渲染这一列。全局决定列会让「表头在、整组全空」，右半屏变成一个空洞；
+    # 组内个别空值仍用「—」占位，不让单元格看起来像没加载。
+    hist_rows = []
+    for cat in order:
+        items = sorted(groups[cat], key=lambda j: str(j.get("delivered_at") or ""), reverse=True)
+        g_has_time = any(str(j.get("delivered_at") or "") for j in items)
+        g_has_state = any(str(j.get("jobId") or "") in gstat for j in items)
+        head = '<th>公司 / 岗位</th><th class="ta-r">薪资</th>'
+        if g_has_time:
+            head += '<th class="col-t">投递时间</th>'
+        if g_has_state:
+            head += '<th class="ta-r col-s">补发</th>'
+        hist_rows.append(
+            '<div class="grp">'
+            f'<h3 class="grp__t">{_h.escape(cat)}<span class="grp__n">{len(items)}</span></h3>'
+            f'<table><thead><tr>{head}</tr></thead><tbody>'
+        )
+        for j in items:
+            kind, label = send_state(j)
+            when = str(j.get("delivered_at") or "")[5:16]
+            cells = ('<td><span class="c__co">%s</span><span class="c__job">%s</span></td>'
+                     '<td class="ta-r num">%s</td>' % (
+                         _h.escape(str(j.get("company") or "—")),
+                         _h.escape(str(j.get("title") or "")),
+                         _h.escape(str(j.get("salary") or "—")),
+                     ))
+            if g_has_time:
+                cells += f'<td class="col-t num">{_h.escape(when or "—")}</td>'
+            if g_has_state:
+                cells += f'<td class="ta-r col-s">{st_html(kind, label) or "—"}</td>'
+            hist_rows.append(f"<tr>{cells}</tr>")
+        hist_rows.append("</tbody></table></div>")
+    hist_html = "".join(hist_rows) if hist_rows else '<p class="empty">还没有历史记录。</p>'
+
+    # ── 打赏（仅当 assets 里有码） ──
     def b64img(name):
         p = os.path.join(SKILL_DIR, "assets", name)
         if not os.path.exists(p):
             return ""
-        with open(p, "rb") as fh:
-            return "data:image/jpeg;base64," + base64.b64encode(fh.read()).decode("ascii")
-    wx = b64img("tip_wechat.jpg")
-    ali = b64img("tip_alipay.jpg")
+        try:
+            with open(p, "rb") as fh:
+                return "data:image/jpeg;base64," + base64.b64encode(fh.read()).decode("ascii")
+        except Exception:
+            return ""
+    wx, ali = b64img("tip_wechat.jpg"), b64img("tip_alipay.jpg")
 
-    # 打赏区块只在 assets/ 里放了赞赏码时才渲染。公开仓库不附带任何收款码，
-    # clone 下来默认没有这一块——避免把一个私人收款码塞进别人的汇报页。
     reward_html = ""
     if wx or ali:
+        qrs = ""
+        if wx:
+            qrs += f'<figure class="qr"><img src="{wx}" alt="微信赞赏码"><figcaption>微信</figcaption></figure>'
+        if ali:
+            qrs += f'<figure class="qr"><img src="{ali}" alt="支付宝赞赏码"><figcaption>支付宝</figcaption></figure>'
         reward_html = (
-            '<div class="divider">— 以 下 为 打 赏 环 节 —</div>'
-            '<div class="reward">'
-            '<h2>✨ 觉得有用？欢迎打赏支持 ✨</h2>'
-            '<p class="lead">本工具持续帮你精准投递、解放重复劳动。<br>'
-            '你的支持是我持续优化的动力 ❤️</p>'
-            '<div class="qrbox">'
-            + ("<div class='qr'><img src='" + wx + "'><div>微信赞赏码</div></div>" if wx else "")
-            + ("<div class='qr'><img src='" + ali + "'><div>支付宝赞赏码</div></div>" if ali else "")
-            + '</div><p class="foot">打赏完全自愿 · 感谢每一份支持</p></div>'
+            '<section class="block tip">'
+            '<h2 class="block__t">这个工具帮到了你</h2>'
+            '<p class="tip__lead">它替你把机械的浏览和投递做完了。愿意的话请作者喝杯咖啡。</p>'
+            f'<div class="qrs">{qrs}</div>'
+            '<p class="tip__foot">完全自愿，不打赏也照常能用。</p>'
+            "</section>"
         )
 
-    now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
-    floor_txt = f"{floor}K" if floor else "—"
-    low_note = (f"<br><b class='warn'>注意：</b>有 {len(low)} 份薪资下限低于门槛 {floor_txt}，请人工核对。"
+    low_note = (f"；另有 {len(low)} 份低于你设的 {floor_txt} 门槛，已标出待核对"
                 if low else "")
-    html = f"""<!doctype html><html lang="zh"><head><meta charset="utf-8">
+    # 两个累计数字的关系直接写在页面上，不留给读者做减法
+    scope = (f"今日 {today_n} 条 + 今天之前 {len(hist)} 条 = 累计 {total} 条。"
+             f"补发状态来自发送记录的成功回执；待办只列还没标记处理的消息{low_note}。")
+
+    CSS = """
+:root{
+  --ink:#111827; --ink-2:#4b5563; --ink-3:#5b6371; --line:#e5e7eb;
+  --line-2:#eef0f3; --bg:#f5f6f8; --card:#fff; --brand:#1d4ed8;
+  --ok:#047857; --half:#b45309; --todo:#b91c1c;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:400 14px/1.65 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+  font-variant-numeric:tabular-nums;padding:36px 20px 64px}
+.page{max-width:920px;margin:0 auto}
+.num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
+
+.head h1{font-size:22px;line-height:1.35;font-weight:650;margin:0 0 6px;letter-spacing:.2px}
+.head p{margin:0;color:var(--ink-3);font-size:13px;line-height:1.6}
+.nw{white-space:nowrap}
+
+.stats{display:flex;flex-wrap:wrap;align-items:flex-end;gap:0 44px;margin:24px 0 4px;
+  padding:0 0 22px;border-bottom:1px solid var(--line)}
+.stat{display:flex;flex-direction:column;gap:2px;min-width:64px}
+.stat__n{font-size:26px;font-weight:650;line-height:1;letter-spacing:-.2px;color:var(--ink-2);
+  display:flex;align-items:baseline;gap:1px}
+.stat__l{font-size:12.5px;color:var(--ink-3);letter-spacing:.3px}
+.stat__of{font-size:14px;font-weight:400;color:var(--ink-3)}
+.stat--lead .stat__n{font-size:40px;color:var(--brand);letter-spacing:-1px}
+.stat--lead .stat__l{color:var(--ink-3)}
+/* 待回复是这页唯一需要用户动手的地方，颜色跟着状态语义走（与「待补」同色系），
+   但字号与主数字同量级——它不该比「已补完」这种无事可做的数字更弱。 */
+.stat--act .stat__n{color:var(--half)}
+
+.block{margin:34px 0 0}
+.block__t{font-size:15px;font-weight:650;margin:0 0 2px;letter-spacing:.2px}
+.block__n{color:var(--ink-3);font-weight:400;margin-left:6px;font-size:13px}
+.block__sub{margin:0 0 14px;color:var(--ink-3);font-size:12.5px}
+
+.rows{list-style:none;margin:12px 0 0;padding:0}
+.row{display:grid;grid-template-columns:1fr auto;gap:2px 20px;
+  padding:12px 0 11px;border-bottom:1px solid var(--line-2)}
+.row:first-child{border-top:1px solid var(--line-2)}
+.row__main{display:flex;flex-direction:column;gap:3px;min-width:0}
+.row__co{font-size:15px;font-weight:600;line-height:1.4}
+.row__job{font-size:13.5px;color:var(--ink-2);line-height:1.5}
+.row__side{display:flex;flex-direction:column;align-items:flex-end;gap:6px;text-align:right}
+.row__sal{font-size:13.5px;color:var(--ink);font-variant-numeric:tabular-nums}
+
+.st{font-size:12px;line-height:1.5;white-space:nowrap}
+.st::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;
+  margin-right:6px;vertical-align:1px;background:currentColor}
+.st--ok{color:var(--ok)}
+.st--half{color:var(--half)}
+.st--todo{color:var(--todo)}
+.st--none{color:var(--ink-3)}
+.st--none::before{background:#c7cbd3}
+
+.todos{list-style:none;margin:12px 0 0;padding:0;border-top:1px solid var(--line)}
+.todo{padding:14px 0;border-bottom:1px solid var(--line-2)}
+.todo__hd{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.todo__co{font-size:15px;font-weight:600}
+.todo__kind{font-size:12px;color:var(--ink-3);letter-spacing:.2px}
+.todo__kind.is-passive{color:var(--ink-3)}
+.todo__when{font-size:12px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.todo__text{margin:6px 0 0;font-size:13.5px;line-height:1.65;color:var(--ink-2);
+  max-width:64ch;overflow-wrap:anywhere}
+
+.grp{margin:26px 0 0}
+.grp__t{display:flex;align-items:baseline;gap:8px;font-size:14px;font-weight:600;
+  color:var(--ink-2);margin:0 0 10px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+.grp__n{font-size:12px;color:var(--ink-3);font-weight:400}
+table{width:100%;border-collapse:collapse}
+th{font-size:11.5px;font-weight:500;color:var(--ink-3);text-align:left;
+  letter-spacing:.5px;padding:0 16px 5px 0}
+td{padding:8px 16px 8px 0;border-bottom:1px solid var(--line-2);vertical-align:top;font-size:13px}
+th:last-child,td:last-child{padding-right:0}
+tr:last-child td{border-bottom:none}
+tbody tr:hover td{background:#fafbfc}
+.c__co{display:block;font-size:13.5px;font-weight:550;color:var(--ink);line-height:1.45}
+.c__job{display:block;font-size:12.5px;color:var(--ink-3);line-height:1.45;
+  overflow-wrap:anywhere}
+.ta-r{text-align:right}
+.col-t{width:92px;white-space:nowrap}
+.col-s{width:100px;white-space:nowrap}
+td.num{font-variant-numeric:tabular-nums;color:var(--ink-2);font-size:12.5px}
+
+.empty{margin:14px 0 0;color:var(--ink-3);font-size:13px}
+
+.tip{margin-top:44px;background:var(--card);border:1px solid var(--line);
+  border-radius:8px;padding:22px 24px}
+.tip__lead{margin:6px 0 18px;color:var(--ink-2);font-size:13.5px;max-width:52ch}
+.qrs{display:flex;gap:24px;flex-wrap:wrap}
+.qr{margin:0;text-align:center}
+.qr img{width:180px;height:180px;display:block;border-radius:4px;border:1px solid var(--line-2)}
+.qr figcaption{margin-top:8px;font-size:12.5px;color:var(--ink-3)}
+.tip__foot{margin:18px 0 0;font-size:12px;color:var(--ink-3)}
+
+.foot{margin:40px 0 0;padding-top:16px;border-top:1px solid var(--line);
+  color:var(--ink-3);font-size:13px;line-height:1.7;max-width:76ch}
+
+@media (max-width:640px){
+  body{padding:24px 14px 48px}
+  .stats{gap:0 26px;padding-bottom:18px}
+  .stat--lead .stat__n{font-size:34px}
+  .stat__n{font-size:22px}
+  /* 单列堆叠：让中文岗位名占满行宽，不再被右侧两段挤成两行 */
+  .row{grid-template-columns:1fr;gap:3px;padding:13px 0 12px}
+  .row__main{order:1}
+  .row__side{order:2;flex-direction:row;align-items:baseline;gap:14px;
+    justify-content:flex-start;text-align:left;margin-top:1px}
+  .col-t{display:none}
+  th.col-t,td.col-t{display:none}
+  .col-s{width:88px}
+}
+"""
+
+    html_out = f"""<!doctype html>
+<html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>BOSS 投递成果汇报 · 本轮 {total} 份</title>
-<style>
-*{{box-sizing:border-box}}
-body{{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#eef2f7;color:#222;margin:0;padding:26px 14px 60px}}
-.wrap{{max-width:880px;margin:0 auto}}
-h1{{font-size:25px;color:#1763c9;margin:0 0 4px}}
-.sub{{color:#7a869a;font-size:13.5px;margin-bottom:16px;line-height:1.6}}
-.banner{{background:linear-gradient(135deg,#1763c9,#36a3ff);color:#fff;border-radius:16px;padding:22px 26px;margin-bottom:18px;box-shadow:0 8px 22px rgba(23,99,201,.25)}}
-.banner .big{{font-size:36px;font-weight:800;letter-spacing:.5px}}
-.banner .small{{font-size:13.5px;opacity:.94;margin-top:8px;line-height:1.6}}
-.pills{{margin:6px 0 8px;line-height:2.4}}
-.pill{{display:inline-block;background:#eaf2ff;color:#1763c9;border:1px solid #cfe2ff;border-radius:20px;padding:4px 12px;font-size:12.5px;margin:3px 6px 3px 0}}
-.card{{background:#fff;border-radius:14px;padding:18px 20px;margin:16px 0;box-shadow:0 2px 10px rgba(20,40,80,.06)}}
-.cat{{font-size:17px;color:#0f3d7a;margin:18px 0 8px;border-left:4px solid #36a3ff;padding-left:10px}}
-.cat .cnt{{color:#36a3ff;font-size:14px;font-weight:600}}
-table{{width:100%;border-collapse:collapse;background:#fff;border-radius:10px;overflow:hidden;border:1px solid #eef1f5}}
-th,td{{text-align:left;padding:9px 12px;font-size:13px;border-bottom:1px solid #eef1f5}}
-th{{background:#f0f5fc;color:#345;font-weight:600}}
-tr:last-child td{{border-bottom:none}}
-tr:hover td{{background:#f7faff}}
-.note{{background:#fff8ec;border:1px solid #ffe2b8;border-radius:12px;padding:14px 18px;font-size:13px;color:#8a5a00;margin-top:18px;line-height:1.8}}
-.warn{{color:#c0392b;font-weight:600}}
-.reward{{margin-top:26px;background:linear-gradient(160deg,#fff7f0,#ffe9df);border:1px solid #ffd9c7;border-radius:18px;padding:26px 20px 30px;text-align:center}}
-.reward h2{{font-size:22px;color:#e8543a;margin:0 0 8px}}
-.reward .lead{{font-size:14.5px;color:#8a5a44;line-height:1.85;margin:0 auto 18px;max-width:560px}}
-.qrbox{{display:flex;flex-direction:column;gap:18px;align-items:center}}
-.qr{{background:#fff;border:1px solid #ffe0cf;border-radius:16px;padding:14px;box-shadow:0 4px 14px rgba(232,84,58,.12)}}
-.qr img{{width:240px;height:240px;max-width:72vw;display:block;border-radius:8px}}
-.qr div{{margin-top:10px;font-size:14.5px;color:#b8432c;font-weight:700}}
-.foot{{margin-top:22px;font-size:12px;color:#c59a86}}
-.divider{{text-align:center;color:#b9c2d0;font-size:12px;margin:30px 0 4px;letter-spacing:2px}}
-</style></head><body>
-<div class="wrap">
-<h1>📊 BOSS 直聘 · 本轮投递成果汇报</h1>
-<div class="sub">生成时间：{now} ｜ 工作地：{city} ｜ 薪资门槛：≥{floor_txt} ｜ 流程：推荐页优先 + 关键词补刀 + AI 语义终审</div>
-<div class="banner"><div class="big">✅ 实投 {total} 份</div><div class="small">全部 verify:true（回读页面确认送达、停留推荐/搜索页未跳转 /chat）· 覆盖 {len(order)} 个方向</div></div>
-<div class="card">
-<div class="pills">{cats_summary}</div>
-{''.join(rows_html)}
-<div class="note">
-<b>投递说明：</b>本轮共实投 <b>{total}</b> 份，覆盖 <b>{len(order)}</b> 个方向；全部 verify:true（回读页面确认送达、停留推荐/搜索页未跳转 /chat）。
-每条岗位均由 AI 语义终审依据你的求职意向（user_profile 的 prefer/avoid）实时判读，不符合方向的岗位据 JD 实录判否、不凑数。{low_note}
-</div>
-</div>
-{reward_html}
-</div>
+<title>投递台账 · {_h.escape(today or now[:10])} · 今日 {today_n} 份</title>
+<style>{CSS}</style>
+</head><body>
+<main class="page">
+
+  <header class="head">
+    <h1>BOSS 直聘 · 投递台账</h1>
+    <p><span class="nw">{_h.escape(now)}</span> · <span class="nw">目标城市 {_h.escape(str(city))}</span> · <span class="nw">薪资门槛 {floor_txt}</span></p>
+  </header>
+
+  <section class="stats" aria-label="总览">
+    <div class="stat stat--lead"><span class="stat__n">{today_n}</span><span class="stat__l">今日投递</span></div>
+    <div class="stat"><span class="stat__n">{total}</span><span class="stat__l">累计</span></div>
+    <div class="stat stat--act"><span class="stat__n">{len(pend)}</span><span class="stat__l">待你回复</span></div>
+  </section>
+
+  <section class="block">
+    <h2 class="block__t">今天投的<span class="block__n">{today_n} 家</span></h2>
+    {f'<p class="block__sub">{_h.escape(today_sub)}</p>' if today_sub else ''}
+    {today_html}
+  </section>
+
+  <section class="block">
+    <h2 class="block__t">等你回复<span class="block__n">{len(pend)} 条</span></h2>
+    {pend_html}
+  </section>
+
+  <section class="block">
+    <h2 class="block__t">今天之前<span class="block__n">{len(hist)} 条</span></h2>
+    <p class="block__sub">按方向分组；早期记录没有存投递时间，只计入条数</p>
+    {hist_html}
+  </section>
+
+  {reward_html}
+
+  <p class="foot">{_h.escape(scope)}</p>
+</main>
 </body></html>"""
+
     html_path = os.path.join(workdir, "投递汇总.html")
     with open(html_path, "w", encoding="utf-8") as f:
-        f.write(html)
+        f.write(html_out)
     return html_path
 
 

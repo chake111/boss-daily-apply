@@ -77,8 +77,8 @@ Typical agent loop (faithful to the user's screenshot flow):
 import sys, os, json, time, urllib.parse
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from scripts.phase_stream import (
-    deliver_click, _panel_shows_job, evaluate, click, SESSION,
-    search_url_for, scroll_jobs_list, RECOMMEND_URL,
+    deliver_click, _panel_shows_job, evaluate, click, SESSION, click_card,
+    search_url_for, scroll_jobs_list, RECOMMEND_URL, _js_click_card,
 )
 from scripts.webbridge_client import (
     ProgressManager, extract_jobs, navigate, parse_salary_max,
@@ -375,14 +375,54 @@ def cmd_walk(keyword):
 
 
 def cmd_open(jid):
-    sel = f'a[href*="job_detail/{jid}"]'
-    evaluate(f"""(function(){{var el=document.querySelector('a[href*="job_detail/{jid}"]');if(el)el.scrollIntoView({{block:'center'}});return !!el;}})()""")
-    time.sleep(1.0)
-    ok = click(sel)
-    time.sleep(2.0)
+    """打开指定岗位卡并读 JD。
+
+    点击与校验合成一步：只有右侧面板真的切到目标岗位（「立即沟通」按钮的 ka
+    含该 jid）才算成功。原先分开做，会出现「clicked:true、panel_ok:false」这种
+    半成功状态，调用方很难判断到底该重试还是跳过。
+
+    click_method 会写进返回值：连续出现 "js" 说明当前环境在丢鼠标事件。
+    """
+    from scripts import locators
+    expect = locators.panel_shows_job_js(jid)
+    ok, method = click_card(jid, expect_js=expect, timeout=5.0)
     panel_ok = _panel_shows_job(jid, "")
-    detail = evaluate("""(function(){var d=document.querySelector('.job-detail-box')||document.querySelector('#main .job-detail');return d?d.innerText:'';})()""")
-    return {"clicked": ok, "panel_ok": panel_ok, "detail": detail}
+    detail = evaluate("""(function(){var d=window.__bossDetail||document.querySelector('.job-detail-box')||document.querySelector('#main .job-detail');return d?d.innerText:'';})()""")
+    if not panel_ok:
+        # 面板没切过去时，detail 读到的是上一张岗位的残留 JD。留着它，下游若只读
+        # detail 不判 panel_ok，就会拿 A 的 JD 去判断 B——比读到空串危险得多。
+        detail = ""
+    return {"clicked": ok, "panel_ok": panel_ok, "click_method": method, "detail": detail}
+
+
+def allowed_directions():
+    """合法 direction = greetings.json 的 direction_map 键 ∪ {其他, 空串}。
+
+    空串允许：direction 是可选参数，`deliver <jid> <公司> <薪资> <行业>` 这种
+    只投不标的用法必须继续能用（217 条历史记录就是这么来的）。
+    「其他」允许：它表示"确实判断不出方向"，补发时走 generic 兜底，
+    而不是像以前那样静默落进 AI 文案。
+    """
+    try:
+        cfg = json.load(open(paths.config("greetings.json"), encoding="utf-8"))
+        keys = list((cfg.get("direction_map") or {}).keys())
+    except Exception:
+        keys = []
+    return keys + ["其他", ""]
+
+
+def bad_direction(direction):
+    """direction 不在白名单时返回错误体，否则 None。
+
+    为什么要在 cmd_open 之前拦：那是页面操作的第一个动作，点完卡片、
+    右侧面板已切换、列表可能重排。校验放在后面，报错时游标已经脏了。
+    """
+    allowed = allowed_directions()
+    if (direction or "").strip() in allowed:
+        return None
+    return {"delivered_ok": False, "error": "BAD_DIRECTION", "direction": direction,
+            "allowed": [a for a in allowed if a],
+            "hint": "方向标错会让补发的话术错配；确实判断不出就写「其他」"}
 
 
 def cmd_deliver(jid, company="", salary="", industry="", direction=""):
@@ -396,6 +436,9 @@ def cmd_deliver(jid, company="", salary="", industry="", direction=""):
     Usage: deliver <jid> [company] [salary] [industry] [direction]
     direction = 高层投递方向标签（活动策划/文旅运营/HR招聘…），用于收尾汇报页按方向分组
     """
+    bad = bad_direction(direction)
+    if bad:
+        return bad
     op = cmd_open(jid)  # scroll+click the card, verify panel is on this job
     if not op.get("panel_ok"):
         return {"delivered_ok": False,
@@ -412,10 +455,13 @@ def cmd_deliver(jid, company="", salary="", industry="", direction=""):
         # unscoped '.job-name' would match the LEFT results-list's first card
         # and record the wrong title (the "clicked A but logged B" trap).
         try:
+            # 标题只从「已确认是目标岗的详情面板」里取。硬编码选择器在这里会
+            # 悄悄退回左列表，把第一张卡的标题记到这一条上（点击A记录B）。
             t = evaluate(
-                "(function(){var b=document.querySelector('.job-detail-box')||"
-                "document.querySelector('#main .job-detail');"
-                "var e=b?b.querySelector('.job-name'):null;"
+                "(function(){var b=window.__bossDetail;"
+                "if(!b||!b.isConnected)return '';"
+                "var e=b.querySelector('.job-name')||b.querySelector('h1')||"
+                "b.querySelector('[class*=job-name]');"
                 "return e?e.innerText.trim():'';})()") or ""
             job["title"] = t
         except Exception:
@@ -495,6 +541,12 @@ def cmd_exhaust():
 
 if __name__ == "__main__":
     action = sys.argv[1] if len(sys.argv) > 1 else "walk"
+    # 方向先校验：连不上浏览器也应该先告诉他"标签写错了"，而不是先报通道不可用
+    if action == "deliver" and len(sys.argv) > 6:
+        _bad = bad_direction(sys.argv[6])
+        if _bad:
+            print(json.dumps(_bad, ensure_ascii=False))
+            sys.exit(0)
     # 除 reset 外每条命令都要驱动浏览器：桥不可达就打印修复指引退出，
     # 别把 ConnectionRefusedError 的堆栈甩给调用方（智能体读不懂堆栈，只会重试）。
     _no_browser = action in ("reset", "--reset") or (

@@ -91,13 +91,13 @@ python scripts/bootstrap.py                   # 只建目录和配置，不装�
 python scripts/onboard.py --yes --city 深圳 --year 2027 \
     --direction "Java 后端开发实习" --resume "D:/简历.pdf"
 python scripts/cdp_client.py --serve          # 起浏览器（后台任务，保持运行）
-python scripts/env_check.py                   # 浏览器 / 通道 / 登录态 三条自检
+python scripts/env_check.py                   # 浏览器 / 通道 / 登录态 / 页面结构 四条自检
 ```
 
 </details>
 
-> **装了 Playwright 就用 Playwright**（点击、等待、上传都交给成熟库），
-> 没装就自动退回仓库内置的协议直连——两条都能跑完整流程，不会因为少装一个包卡住。
+> **默认优先使用内置 CDP**；Playwright 只有显式设置 `BOSS_BACKEND=playwright` 才启用。
+> WorkBuddy 沙箱真实操作必须显式使用 `BOSS_BACKEND=cdp`，避免 Playwright 带走调试浏览器。
 
 向导已经把这些写好了。之后想细调（换城市、换话术）再改这两个文件：
 
@@ -111,7 +111,8 @@ python scripts/env_check.py                   # 浏览器 / 通道 / 登录态 �
 ```bash
 python scripts/supply_probe.py --rounds 20        # 探供给，出配额
 python scripts/_live_driver.py walk               # 开始逐张走卡
-python scripts/send_img2.py 5 --msg               # 每投满 5 份补一次图
+BOSS_BACKEND=cdp python scripts/send_img2.py 5 --msg --same-tab  # WorkBuddy：每投满 5 份补一次图
+BOSS_BACKEND=cdp python scripts/send_img2.py 5 --pending --msg --auto-img --same-tab  # 只补没补齐的，从最旧的开始
 python scripts/phase_stream.py --mode report --workdir "$BOSS_WORKDIR"
 ```
 
@@ -125,7 +126,7 @@ python scripts/phase_stream.py --mode report --workdir "$BOSS_WORKDIR"
   **不要求 Chrome**。
 - **自动化通道，二选一**：
   - **CDP**（默认推荐）：浏览器自带的调试协议，`cdp_client.py --launch` 即可，**零扩展**。
-  - **WebBridge**：Kimi WebBridge 扩展 + 本地服务（端口 10086），已有就自动优先用。
+  - **WebBridge**：Kimi WebBridge 扩展 + 本地服务（端口 10086），仅在 CDP 不可用时自动回退。
   - 都不能用 CDP 直连内置浏览器——拿不到你的登录态。
 - Python 3.9+，**只用标准库**，不需要 `pip install`。
 - Windows 上浏览器要用 `explorer.exe '<路径>'` 或 `DETACHED_PROCESS` 拉起
@@ -147,7 +148,9 @@ scripts/
   _live_driver.py   walk / open / deliver / reject —— 唯一投递入口
   supply_probe.py   供给探测 + 配额分配（默认 jobType=1902 实习筛选）
   screen.py         机械否决
-  send_img2.py      补发简历图 + 话术（第二个标签，不打断搜索页）
+  send_img2.py      补发简历图 + 话术（WorkBuddy 推荐 CDP + --same-tab；第二标签实验性）
+  daily_close.py    收尾对账：列出没送图 / 没发话术的记录，给逐条补发命令（只读）
+  acceptance.py     配置验收：用真实配置/台账验证判据不会恒真（selftest 管代码，它管配置）
   reply_check.py    扫会话 → 「待我动作」台账
   stats.py          回复率报表（Wilson 95% 区间）
   phase_stream.py   收尾生成 投递汇总.html

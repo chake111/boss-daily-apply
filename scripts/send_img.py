@@ -28,18 +28,6 @@ def ev(code):
         return "EXC:" + str(e)[:120]
 
 
-def load_targets(limit):
-    p = paths.state("stream_progress.json")
-    try:
-        d = json.load(open(p, encoding="utf-8"))
-    except FileNotFoundError:
-        return []
-    except Exception:
-        return []
-    names = [r.get("company") or "" for r in d.get("delivered", [])]
-    return [n for n in names if n][-limit:]
-
-
 def open_conv(company):
     """按公司名定位左侧会话并原生点击，返回 (ok, header)。"""
     sel = (
@@ -54,11 +42,17 @@ def open_conv(company):
         return False, r
     click('[data-rb="1"]')
     ev("document.querySelector('[data-rb=\"1\"]')&&document.querySelector('[data-rb=\"1\"]').removeAttribute('data-rb')")
-    time.sleep(2.2)
-    header = ev(
-        "(function(){var b=document.querySelector('.chat-conversation');"
-        "if(!b)return '';var h=b.innerText||'';return h.slice(0,120).replace(/\\n/g,' / ');})()"
-    )
+    # 点开会话后页面会重渲染，执行上下文短暂失效，单次读取常常拿到空串。
+    # 空串会让上层的「标题不符」判定误杀（明明开对了，却因为读到空而跳过）。
+    header = ""
+    for _ in range(8):
+        time.sleep(0.9)
+        header = ev(
+            "(function(){var b=document.querySelector('.chat-conversation');"
+            "if(!b)return '';var h=b.innerText||'';return h.slice(0,120).replace(/\\n/g,' / ');})()"
+        )
+        if header:
+            break
     return True, header
 
 

@@ -2,9 +2,11 @@
 """环境检测模块 —— 启动时自动检查运行前置条件。
 
 检测项：
-  ① Chrome 浏览器是否已安装
-  ② Kimi WebBridge 插件是否可用（端口 10086）
+  ① 任意 Chromium 系浏览器是否已安装（不要求 Chrome）
+  ② 自动化通道：内置 CDP（默认）/ Kimi WebBridge 扩展
   ③ Boss 直聘页面是否已登录（复用用户登录态）
+  ④ 页面结构：详情面板 / 岗位卡片 / 「立即沟通」按钮是否还找得到
+     （BOSS 改版会让前三项全绿但流程静默失效，所以单独有一项）
 
 用法：
     from scripts.env_check import check_env, EnvResult
@@ -190,6 +192,59 @@ def _check_boss_login():
         return False, f"无法检测登录态: {e}（先让自动化通道就绪：python scripts/cdp_client.py --launch）"
 
 
+# ── 页面结构（开投前对齐「页面长什么样」和「代码认识什么」）──
+def _check_page_structure():
+    """按当前 DOM 检查我们还能不能找到详情面板、岗位卡片、立即沟通按钮。
+
+    为什么单独一项（2026-11-06 实测）：BOSS 把右侧详情容器从 `#main .job-detail`
+    改成 `.job-detail-box` 之后，整套流程静默失效——panel_ok 恒假、点击落到别处，
+    日志里只有满屏 SKIP，一个错误都没有。等到逐张判卡才发现已经浪费了十几分钟。
+    这一项开投前跑，把「选不中卡片」变成一条一眼能看懂的红灯。
+    """
+    try:
+        import json as _json
+        from scripts.webbridge_client import evaluate
+        from scripts import locators
+    except Exception as e:
+        return False, f"页面结构检测不可用: {e}"
+
+    try:
+        import time as _t
+        raw = ""
+        d = {}
+        # 上一步刚导航过，列表可能还没渲染完——轮询到「卡片和面板都在」为止。
+        # 只看 cards 是不够的：列表渲染比右侧面板快，面板还没挂载就 break 的话，
+        # 会把「还没渲染」误报成「BOSS 改版了」，让人去改没错的选择器。
+        for _ in range(8):
+            try:
+                raw = evaluate(locators.page_health_js()) or ""
+                d = _json.loads(raw) if raw.strip().startswith("{") else {}
+            except Exception as e:
+                return False, f"读取页面结构失败: {e}"
+            if (d.get("cards") or 0) > 0 and d.get("detail"):
+                break
+            _t.sleep(0.8)
+    except Exception as e:
+        return False, f"页面结构检测不可用: {e}"
+
+    if not d:
+        return False, ("读不到页面结构（可能不在岗位列表页）。\n"
+                       "   先打开 https://www.zhipin.com/web/geek/jobs 再检测。")
+
+    detail, cards, btn = d.get("detail"), d.get("cards") or 0, d.get("chatBtn")
+    if cards and btn and detail:
+        return True, f"详情面板可定位 · {cards} 张卡 · 立即沟通按钮在位"
+    if cards and btn and not detail:
+        return False, ("能看到 %d 张岗位卡和「立即沟通」，但找不到右侧详情面板。\n"
+                       "   BOSS 八成又改版了：去 scripts/locators.py 的 _DETAIL_REF "
+                       "补一条选择器（SEL 数组）。" % cards)
+    if cards and not btn:
+        return False, ("能看到 %d 张岗位卡，但没有「立即沟通」按钮。\n"
+                       "   可能停在非岗位详情页，或按钮文案改了：检查 locators.CHAT_BUTTON。" % cards)
+    return False, ("页面上找不到岗位卡片（%d 张）。\n"
+                   "   当前页不是搜索结果页，或者列表没加载出来。" % cards)
+
+
 # ── 自动化通道 ─────────────────────────────────────
 def _kimi_exe():
     return os.path.normpath(os.path.expanduser(
@@ -247,6 +302,10 @@ def check_env(verbose=True):
     if passed:
         passed2, detail2 = _check_boss_login()
         result.add("Boss 直聘登录", passed2, detail2)
+        if passed2:
+            # 登录了才有意义：按当前 DOM 检查代码还认不认得这个页面
+            passed3, detail3 = _check_page_structure()
+            result.add("页面结构", passed3, detail3)
 
     result.build_message()
     if verbose:

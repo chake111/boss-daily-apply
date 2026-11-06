@@ -39,7 +39,7 @@ DISPOSABLE_FILES = [".onboarded"]
 NEVER_DELETE = {
     "stream_progress.json", "walk_state.json", "reply_log.json",
     "reply_events.jsonl", "pending_actions.json", "daily_log.json",
-    "img_mode_log.json", "supply.json", "user_profile.json",
+    "img_mode_log.json", "greeting_log.jsonl", "supply.json", "user_profile.json",
     "回复率报表.md", "投递汇总.html",
 }
 
