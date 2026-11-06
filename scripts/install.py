@@ -65,6 +65,12 @@ python "{skill}/scripts/_live_driver.py" reject <jobId>
 def _copy_tree(src, dst, dry_run, force):
     if os.path.exists(dst) and not force:
         return "skip", dst + "（已存在，要覆盖加 --force）"
+    # 目标目录本身是 git 工作区时，--force 的 rmtree 会把 .git 一起删掉，
+    # 连带删掉本地所有未推送的提交和历史。这种情况一律拒绝，交给人处理。
+    # 触发场景：仓库直接放在安装位置（改代码就在那儿改），又一次从这里装到别处，
+    # 或者装了两次。宁可让命令失败，也不能静默删掉版本库。
+    if os.path.isdir(os.path.join(dst, ".git")):
+        return "blocked", dst + "（是 git 工作区，拒绝覆盖：请先提交或用别处的副本部署）"
     if dry_run:
         return "dry", dst
     if os.path.exists(dst) and force:
@@ -155,8 +161,12 @@ def main():
             print("plain: 不复制任何文件。仓库就在 %s" % ROOT)
             print("  把 SKILL.md 的内容交给你的智能体，或让它直接读这个目录即可。")
             continue
-        icon = {"ok": "✓", "skip": "·", "dry": "○", "updated": "✓", "appended": "✓"}.get(act, "?")
+        icon = {"ok": "✓", "skip": "·", "dry": "○", "updated": "✓", "appended": "✓",
+                "blocked": "✗"}.get(act, "?")
         print("%s %-14s %s" % (icon, name, where))
+        if act == "blocked":
+            print("    版本库不能覆盖。若确实要用这份覆盖，先 cd 过去 git status 确认，"
+                  "手动删掉 .git 再装；或换个目标目录。")
 
     if not a.dry_run and any(ts[k][0] == "dir" for k in chosen):
         hint_dir = ts["claude"][1] if "claude" in chosen else (
