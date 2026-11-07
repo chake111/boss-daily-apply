@@ -141,6 +141,8 @@ def main():
         check("stats 分母只算已过窗", lambda: _expect(run(["scripts/stats.py"], wd), "观察中"))
         check("reply_check --list 不碰浏览器", lambda: _expect(
             run(["scripts/reply_check.py", "--list"], wd), "没有待办"))
+        check("stage 能记、去重、拒非法阶段", lambda: _stage_e2e(wd))
+        check("decide 看到约面并算出断点", lambda: _decide_e2e(wd))
 
         print("\n[5] 话术与收尾页")
         # 用公司过滤而不是"最近 3 条"：后者会被 fixture 增删记录带偏（以前这条断言
@@ -298,6 +300,26 @@ def _expect_all(text, needles):
 def _exists(path):
     if not os.path.exists(path):
         raise AssertionError("文件不存在: " + path)
+
+
+def _stage_e2e(wd):
+    """进度台账：能写、重复写不撑大漏斗、非法阶段被拒。"""
+    _expect(run(["scripts/stage.py", "log", "星辰科技", "约面"], wd), "已记录")
+    _expect(run(["scripts/stage.py", "log", "星辰科技", "约面"], wd), "已存在")
+    _expect(run(["scripts/stage.py", "log", "星辰科技", "三面"], wd, expect_ok=False),
+            "BAD_STAGE")
+    _expect(run(["scripts/stage.py", "list"], wd), "星辰科技")
+    lines = [l for l in open(os.path.join(wd, "interview_log.jsonl"),
+                             encoding="utf-8").read().splitlines() if l.strip()]
+    if len(lines) != 1:
+        raise AssertionError("重复记录不该追加行，实际 %d 行" % len(lines))
+
+
+def _decide_e2e(wd):
+    """决策看板：约面要真的进漏斗，否则它和 stats.py 没有区别。"""
+    run(["scripts/decide.py"], wd)
+    md = open(os.path.join(wd, "决策看板.md"), encoding="utf-8").read()
+    _expect_all(md, ["转化链", "| 面试 | 1 |", "| 有效推进 | 1 |", "## 断点"])
 
 
 def _backend_defaults_to_cdp():

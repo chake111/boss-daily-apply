@@ -127,6 +127,8 @@ scripts/
   daily_close.py    收尾对账：谁还没送简历图 / 谁没发话术（只读，给逐条补发命令）
   acceptance.py     配置验收：判据在你真实配置下会不会恒真（开投前跑，16 项）
   reply_check.py    扫会话，出「待我动作」台账
+  stage.py          进度台账：约面/一面/二面/offer——会话里看不出来的那一段
+  decide.py         决策看板：转化链 + 断点 + 今日上限（看下一步用这个）
   stats.py          回复率报表（Wilson 95% 区间）
   phase_stream.py   收尾生成 投递汇总.html
   ledger.py         无浏览器模式：手动记账（schema 与 driver 一致）
@@ -364,12 +366,21 @@ BOSS_BACKEND=cdp python "$SKILL_DIR/scripts/send_img2.py" --pending --include-le
 
 ### Step 7 · 收尾
 
-先对账，再出汇总页：
+先对账，再出决策，最后出汇总页：
 
 ```bash
 python "$SKILL_DIR/scripts/daily_close.py"                # 只读，默认退出码 0
+python "$SKILL_DIR/scripts/decide.py" --target <本轮份数>  # 转化链 + 断点 + 今日上限
 python "$SKILL_DIR/scripts/phase_stream.py" --mode report --workdir "$BOSS_WORKDIR"
 ```
+
+`decide.py` 把「投递 → 回复 → 推进 → 约面 → offer」连成一条链，指出**最窄的那一段**，
+再给出今天实际投得出去几份（新卡上界 × 历史合格率）。`stats.py` 回答"回复率多少"，
+它回答"下一步干什么"——收尾时**两个都要看，先看 decide**。
+
+**它的结论优先于用户的份数**：算出的上限低于用户要的份数时（池子只给得出 20 份、用户说投 40），
+按 20 报并说明原因（`--target 40` 就是用来做这个对比的）。反过来，上限够、断点却在回复之后时，
+加量没有意义，要直说。
 
 `daily_close.py` 会列出「投了但没送简历图 / 没发话术」的记录，并给出逐条可复制的
 `send_img2.py --job <jobId>` 命令。**把缺口清单原样贴给用户**，让他决定当场补还是明天补——
@@ -395,6 +406,16 @@ PYTHONPATH="$SKILL_DIR" python "$SKILL_DIR/scripts/reply_check.py"
 待办是台账不是快照：`--list` 看全部、`--resolve <id>` 关掉。
 **`reply_check.py` 只读不发**——`kind=要简历` 的还得另跑 `send_img2.py 1 "<短名>" --msg`。
 
+约到面试就立刻记一站，否则漏斗永远停在「待我动作」，`decide.py` 也就永远算不出断点：
+
+```bash
+python "$SKILL_DIR/scripts/stage.py" log "公司" 约面 --note "周四 15:00 腾讯会议"
+python "$SKILL_DIR/scripts/stage.py" list
+```
+
+阶段只有 `约面 / 一面 / 二面 / 终面 / offer / 拒 / 失联` 七种，写别的会被拒并列出可选值。
+同岗位同阶段重复记不会重复计数（幂等）。
+
 每周跑一次 `stats.py` 出 `回复率报表.md`（含 Wilson 95% 区间）。
 每组 n < 30 就写"样本不足"，别拿小样本比高低。
 
@@ -418,6 +439,7 @@ PYTHONPATH="$SKILL_DIR" python "$SKILL_DIR/scripts/reply_check.py"
 异常：hidden 状态 / 哪些词走了分页、扫到第几页 / 有没有只扫到首屏的词
 今日累计：X 份（口径：daily_log.json 求和）
 供给：哪些词已空、fresh 还剩几张、各方向「目标/实投」差多少
+断点：哪一段最窄、下一步做什么（照 decide.py 的结论写，别自己总结）
 待我动作：要简历 / 网申 / 约面，逐条列
 ```
 
@@ -425,5 +447,8 @@ PYTHONPATH="$SKILL_DIR" python "$SKILL_DIR/scripts/reply_check.py"
 
 ## 节奏
 
-日上限 150；单轮份数只看用户给的数，别自己加量。当日累计过 130 提醒一次。
-一轮合格率低于 40% 说明供给见底，收工并告诉用户该换哪个关键词。
+日上限 150；单轮份数听用户给的数，但要用 `decide.py` 算的供给上界封顶。当日累计过 130 提醒一次。
+
+一轮合格率低于 40% 说明**这批词不对口**，先换词——不等于没货：实测合格率 39.3% 时，
+27 个宽词仍有 177 张新卡。供给真的空了的信号是 `keyword_health` 里连续两轮 `fresh=0`，
+以及 `walk --next` 连续 10+ 张「已判否-跳过」。
