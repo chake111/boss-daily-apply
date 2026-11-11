@@ -22,7 +22,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from scripts import metrics, paths  # noqa: E402
-from scripts.send_img2 import (  # noqa: E402
+from scripts.send_followup import (  # noqa: E402
     bucket_text, greeting_prefixes, greeting_anchors, pick_greeting, text_already_sent)
 
 VERBOSE = "-v" in sys.argv

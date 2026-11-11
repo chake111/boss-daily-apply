@@ -6,7 +6,7 @@
 常规流程是「先攒一批投递，再分批补发通用变体图」。但逐岗位定制简历时，
 每家公司的图都不一样，**批次就被打散成一份一份**：投完这家必须当场把这张图
 发出去，否则后面再补发就得回头查"这家的图是哪张"。手动串两条命令容易漏，
-这里把 deliver + send_img2 串成一步，失败时能看出是哪一段断的。
+这里把 deliver + send_followup 串成一步，失败时能看出是哪一段断的。
 
 用法
 ----
@@ -34,7 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from scripts import paths  # noqa: E402
 from scripts import _live_driver as L  # noqa: E402
 
-SEND_IMG = os.path.join(paths.SCRIPTS_DIR, "send_img2.py")
+SEND_IMG = os.path.join(paths.SCRIPTS_DIR, "send_followup.py")
 
 
 def out(obj, code=0):

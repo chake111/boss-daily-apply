@@ -542,7 +542,7 @@ class Backend:
         if action == "bring_to_front":
             # 后台标签会被 Chromium 降频：渲染暂停、执行上下文时有时无。
             # CDP 里"切前台"就是 activate 该标签的 target（与 playwright
-            # bring_to_front 等价，供 send_img2 第二标签模式用）。
+            # bring_to_front 等价，供 send_followup 第二标签模式用）。
             tid = self.owned.get(session)
             anchor = self.conns.get(session) or next(iter(self.conns.values()), None)
             if anchor is None:

@@ -147,13 +147,13 @@ def main():
         print("\n[5] 话术与收尾页")
         # 用公司过滤而不是"最近 3 条"：后者会被 fixture 增删记录带偏（以前这条断言
         # 依赖 fixture 的排列顺序，加一条记录就会红）。
-        check("send_img2 --dry 按方向选桶", lambda: _expect(
-            run(["scripts/send_img2.py", "1", "智言科技", "--dry"], wd), "[ai]"))
+        check("send_followup --dry 按方向选桶", lambda: _expect(
+            run(["scripts/send_followup.py", "1", "智言科技", "--dry"], wd), "[ai]"))
         check("同公司双投按记录选桶（不串档）", lambda: _expect_all(
-            run(["scripts/send_img2.py", "1", "云谷信息", "--dry"], wd),
+            run(["scripts/send_followup.py", "1", "云谷信息", "--dry"], wd),
             ["[backend]", "[python]"]))
         check("未知方向走 generic 兜底", lambda: _expect(
-            run(["scripts/send_img2.py", "1", "云易证", "--dry"], wd), "[generic]"))
+            run(["scripts/send_followup.py", "1", "云易证", "--dry"], wd), "[generic]"))
         check("direction 白名单拒绝未登记方向", lambda: _expect(
             run(["scripts/_live_driver.py", "deliver", "zz9", "某公司",
                  "200元/天", "互联网", "算法工程"], wd), "BAD_DIRECTION"))
@@ -376,7 +376,7 @@ def _cdp_bring_to_front_unit():
 def _preflight_classification():
     if ROOT not in sys.path:
         sys.path.insert(0, ROOT)
-    from scripts.send_img2 import classify_batch_state
+    from scripts.send_followup import classify_batch_state
     chat = "https://www.zhipin.com/web/geek/chat"
     cases = [
         (("", 0, "", ""), "BROWSER_DEAD"),
@@ -397,7 +397,7 @@ def _header_classification():
     """ok=True 但标题为空/EXC 必须停批，不能伪装成「标题不符」继续下一家。"""
     if ROOT not in sys.path:
         sys.path.insert(0, ROOT)
-    from scripts.send_img2 import classify_header_state as cls
+    from scripts.send_followup import classify_header_state as cls
     cases = [
         (("腾讯", "腾讯 | 前端实习生", "", ""), "OK"),
         (("深圳用图科技有限公司", "深圳用图科技 | AI开发实习生", "", ""), "OK"),
@@ -431,7 +431,7 @@ def _pending_picks_oldest():
     if ROOT not in sys.path:
         sys.path.insert(0, ROOT)
     import tempfile
-    import scripts.send_img2 as S
+    import scripts.send_followup as S
 
     d = tempfile.mkdtemp(prefix="pending-")
     prog = os.path.join(d, "stream_progress.json")
@@ -463,7 +463,7 @@ def _pending_skips_legacy():
     if ROOT not in sys.path:
         sys.path.insert(0, ROOT)
     import tempfile
-    import scripts.send_img2 as S
+    import scripts.send_followup as S
 
     d = tempfile.mkdtemp(prefix="legacy-")
     prog = os.path.join(d, "stream_progress.json")
@@ -495,14 +495,14 @@ def _pending_skips_legacy():
 def _locate_js_picks_right_conv():
     """同公司两岗位名只差前缀时，定位必须选对，选不出来要报 ambiguous。
 
-    真跑 send_img2._locate_js 生成的 JS（不是另写一份逻辑），用 node 加载。
+    真跑 send_followup._locate_js 生成的 JS（不是另写一份逻辑），用 node 加载。
     2026-11-05 的串档就是 title[:4] = 「【实习】」两条都命中，点了第一条。
     """
     if ROOT not in sys.path:
         sys.path.insert(0, ROOT)
     import shutil
     import tempfile
-    from scripts.send_img2 import _locate_js, company_keys, title_probes
+    from scripts.send_followup import _locate_js, company_keys, title_probes
 
     node = shutil.which("node")
     if not node:

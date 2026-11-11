@@ -470,7 +470,7 @@ def _list_other_boss_script_pids():
         # macOS / Linux：pgrep -f 直接按命令行匹配，比 Get-CimInstance 简单得多
         try:
             r = subprocess.run(
-                ["pgrep", "-f", "_live_driver.py|phase_stream.py|send_img2.py"],
+                ["pgrep", "-f", "_live_driver.py|phase_stream.py|send_followup.py"],
                 capture_output=True, text=True, timeout=20)
             return [int(x) for x in r.stdout.split() if x.isdigit() and int(x) != me]
         except Exception:
@@ -479,7 +479,7 @@ def _list_other_boss_script_pids():
         ps = (r"Get-CimInstance Win32_Process -Filter \"Name='python.exe'\""
               r" | Where-Object { ($_.CommandLine -like '*_live_driver.py*'"
               r" -or $_.CommandLine -like '*phase_stream.py*'"
-              r" -or $_.CommandLine -like '*send_img2.py*')"
+              r" -or $_.CommandLine -like '*send_followup.py*')"
               r" -and $_.ProcessId -ne %d }"
               r" | Select-Object -ExpandProperty ProcessId") % me
         out = subprocess.run(["powershell", "-NoProfile", "-Command", ps],

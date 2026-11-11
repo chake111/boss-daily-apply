@@ -25,7 +25,7 @@ from scripts import metrics, paths  # noqa: E402
 
 IMG_MODE_LOG = paths.state("img_mode_log.json")
 DAILY_LOG = paths.state("daily_log.json")
-SEND_TIP = "python scripts/send_img2.py --job %s --msg --auto-img"
+SEND_TIP = "python scripts/send_followup.py --job %s --msg --auto-img"
 
 
 def last_daily_date():
@@ -127,7 +127,7 @@ def main():
         if jid:
             print("        " + SEND_TIP % jid)
         else:
-            print('        python scripts/send_img2.py 1 "%s" --msg --auto-img'
+            print('        python scripts/send_followup.py 1 "%s" --msg --auto-img'
                   % (r.get("company") or ""))
 
     print("")
