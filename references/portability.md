@@ -142,12 +142,19 @@ python scripts/stats.py              # 回复率报表，口径与自动模式�
 | Claude Code | `python scripts/install.py --target claude` | 装到 `~/.claude/skills/`；项目级加 `--project .` |
 | Cursor | `python scripts/install.py --target cursor --project .` | 生成 `.cursor/rules/*.mdc` |
 | Codex CLI | `python scripts/install.py --target codex --project .` | 往 `AGENTS.md` 插受管区块 |
+| Google Antigravity | `python scripts/install.py --target antigravity` | 全局放**入口指针**到 `~/.gemini/config/skills/`，正文指回本仓库；加 `--copy` 改成整包复制 |
 | WorkBuddy | `python scripts/install.py --target workbuddy` | 装到 `~/.workbuddy/skills/` |
 | 其他 / 自研 | `python scripts/install.py --target plain` | 不复制，直接给它仓库路径 |
 | 纯终端 | 不用安装 | 直接跑脚本 |
 
+Antigravity 三个面（App / CLI / IDE）都从 `~/.gemini/config/skills/` 读全局技能，工作区级
+是 `<项目>/.agents/skills/`（旧版 `.agent/skills/` 仍兼容）。它原生按 `SKILL.md` 的
+`description` 判断要不要用，所以这里只放指针、不放副本——仓库里改了判据或选择器，
+Antigravity 下次读到的就是新的，不会出现「两份代码各说各话」。
+
 ```bash
 python scripts/install.py --list          # 看每个目标装没装、装在哪
+python scripts/install.py --target antigravity --dry-run
 ```
 
 **什么都不装也能跑**：脚本全是标准库，`python scripts/selftest.py` 可直接验证。

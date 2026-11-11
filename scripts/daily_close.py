@@ -99,6 +99,18 @@ def main():
     print("对账区间：%s 起，投递 %d 条" % (since, len(rows)))
     order = ("完成", "缺话术", "缺简历图", "图话术都缺", "旧记录待确认", "无留痕")
     print("  " + " / ".join("%s %d" % (k, len(buckets.get(k, []))) for k in order))
+
+    custom_m = 0
+    bucket_k = 0
+    for r in rows:
+        e = metrics.event_for(r, events, counts) or {}
+        src = e.get("src") or r.get("greeting_src")
+        b = e.get("bucket")
+        if src == "jd" or b == "jd":
+            custom_m += 1
+        elif e or r.get("delivered_at"):
+            bucket_k += 1
+    print("  话术来源：定制 %d / 退回桶 %d" % (custom_m, bucket_k))
     print("")
 
     if not todo:

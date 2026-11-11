@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Boss直聘投递 — 统一配置 v6（零硬编码 · AI 语义终审）
+"""Boss直聘投递 — 统一配置（零硬编码 · AI 语义终审）
 
-v6 核心变更（2026-08-01）：
+核心约定：
   - 彻底删除所有硬编码筛选标准（不再有任何 BASE_* 排除词 / 行业黑名单 /
     手艺岗规则 / 门店店长 off-target / 管理岗豁免 / 强相关关键词表）。
   - 任何"投递标准"与"排除标准"都只能来自 user_profile.json 中用户自己填写的
@@ -145,11 +145,11 @@ def parse_salary_max(sal):
 
 
 # ═══════════════════════════════════════════════════════════
-# AI 语义审核提示词（v6 — 完全由 profile 驱动，零硬编码类别）
+# AI 语义审核提示词（完全由 profile 驱动，零硬编码类别）
 # ═══════════════════════════════════════════════════════════
 
 def build_review_prompt(profile=None, job=None, jd_text=""):
-    """根据个人档案动态生成 AI 语义审核提示词（v6 泛用化，不写死任何行业/类别）。
+    """根据个人档案动态生成 AI 语义审核提示词（不写死任何行业/类别）。
 
     返回的字符串内含岗位全量信息 + 用户自述意向，交由【智能体自身】基于语义理解
     输出结构化决策（不调用任何外部 LLM API）。所有"该投 / 不该投"的标准都来自
@@ -250,3 +250,167 @@ def build_candidate_dossier(profile, job, jd_text=""):
         )},
         "review_prompt": build_review_prompt(profile, job, jd_text),
     }
+
+
+# ═══════════════════════════════════════════════════════════
+# 打招呼语方法论与提示词组装
+# ═══════════════════════════════════════════════════════════
+
+def load_greeting_playbook():
+    """读取 references/greeting-playbook.md 全文（逐字，不得改写）。"""
+    p = os.path.join(SKILL_DIR, "references", "greeting-playbook.md")
+    if os.path.exists(p):
+        with open(p, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    return ""
+
+
+def extract_greeting_facts(profile=None):
+    """提取或兜底抽取打招呼语所需的事实清单。
+
+    若 profile 中显式提供了 greeting_facts，则直接使用，标记 unverified=False；
+    否则从 experience、role_summary、accept_note 中启发式抽取，标记 unverified=True。
+    返回: (facts_dict, unverified_bool)
+    """
+    import re
+    p = profile or PROFILE or {}
+    if "greeting_facts" in p and isinstance(p["greeting_facts"], dict):
+        facts = dict(p["greeting_facts"])
+        c = facts.get("commitment") or {}
+        facts["commitment"] = {
+            "available_now": c.get("available_now", True),
+            "months": c.get("months", 6),
+            "days_per_week": c.get("days_per_week", 5),
+        }
+        return facts, False
+
+    exp = p.get("experience") or ""
+    role = p.get("role_summary") or ""
+    accept = p.get("accept_note") or ""
+    all_text = f"{exp} {role} {accept}"
+
+    m_school = re.search(r'([\u4e00-\u9fa5]+(?:大学|学院|职业技术大学))', all_text)
+    school = m_school.group(1) if m_school else ""
+
+    m_grade = re.search(r'(\d{4}\s*届)', all_text)
+    grade = m_grade.group(1) if m_grade else ""
+
+    internships = []
+    for m in re.finditer(r'([\u4e00-\u9fa5a-zA-Z0-9]+(?:实习|经历))', all_text):
+        internships.append(m.group(1))
+
+    awards = []
+    for m in re.finditer(r'([\u4e00-\u9fa5a-zA-Z0-9]+(?:省[级一二三]等奖|国[一二三]|银奖|金奖|铜奖|证书|六级|四级|设计师))', all_text):
+        awards.append(m.group(1))
+
+    known_stacks = [
+        "Java", "Spring Boot", "Spring Cloud", "Vue", "React", "Python", "Redis",
+        "MySQL", "MyBatis", "MyBatis-Plus", "WebSocket", "JWT", "Docker", "Git",
+        "Linux", "Claude Code", "Cursor", "AI 编程工具", "Next.js", "TypeScript"
+    ]
+    matched_stack = []
+    for s in known_stacks:
+        if re.search(r'\b' + re.escape(s) + r'\b', all_text, re.IGNORECASE):
+            matched_stack.append(s)
+
+    months = 6
+    m_mo = re.search(r'(\d+)\s*个?月', all_text)
+    if m_mo:
+        months = int(m_mo.group(1))
+    elif "半年" in all_text:
+        months = 6
+
+    days = 5
+    m_day = re.search(r'每周\s*([0-9五5])\s*天', all_text)
+    if m_day:
+        d_val = m_day.group(1)
+        days = 5 if d_val == "五" else int(d_val)
+
+    avail = ("随时到岗" in all_text) or ("可随时" in all_text)
+
+    facts = {
+        "school": school or "在读高校",
+        "grade": grade or "在读",
+        "internships": internships,
+        "awards": list(dict.fromkeys(awards)),
+        "stack": matched_stack or ["Java", "Spring Boot", "MySQL"],
+        "commitment": {
+            "available_now": avail,
+            "months": months,
+            "days_per_week": days,
+        }
+    }
+    return facts, True
+
+
+def build_greeting_prompt(profile=None, job=None, jd_text=""):
+    """按方法论原文与候选人事实生成打招呼语提示词（七层结构，严格顺序）。
+
+    参数：
+      profile : user_profile dict
+      job     : 岗位 dict（title/company/salary/direction 等）
+      jd_text : JD 正文
+    """
+    p = profile or PROFILE or {}
+    job = job or {}
+    facts, unverified = extract_greeting_facts(p)
+    playbook = load_greeting_playbook()
+
+    school = facts.get("school") or ""
+    grade = facts.get("grade") or ""
+    internships = "、".join(facts.get("internships") or []) or "（无）"
+    awards = "、".join(facts.get("awards") or []) or "（无）"
+    stack = "、".join(facts.get("stack") or []) or "（未列出）"
+    cmt = facts.get("commitment") or {}
+    avail_str = "可随时到岗" if cmt.get("available_now", True) else "协调后到岗"
+    cmt_str = f"{avail_str}、连续实习 {cmt.get('months', 6)} 个月以上、每周出勤 {cmt.get('days_per_week', 5)} 天"
+
+    unverified_note = "（注意：以上事实从 profile 启发式抽取，标注「未核实」，投递前请在 user_profile.json 中补充 greeting_facts 核准）\n" if unverified else ""
+
+    title = job.get("title") or "（岗位未指定）"
+    company = job.get("company") or "（公司未指定）"
+    salary = job.get("salary") or "（薪资未指定）"
+    direction = job.get("direction") or "通用"
+    jd = (jd_text or job.get("detail") or "（未读取到 JD）").strip()
+
+    prompt = f"""你在替一位候选人写 BOSS直聘 的打招呼语。只写这一条，不要寒暄、不要解释。
+
+【唯一权威写法】以下原文逐条遵守，不得改换风格、不得漏掉其中任何一条规则：
+{playbook}
+
+【候选人可用事实（只能用这些，不许编）】
+- 学校 / 届别：{school} / {grade}
+- 实习：{internships}
+- 奖项 / 证书：{awards}
+- 技术栈：{stack}
+- 到岗承诺：{cmt_str}
+{unverified_note}
+【本次岗位】
+- {title}｜{company}｜{salary}｜{direction}
+- JD 全文：
+{jd}
+
+【硬约束（脚本会逐条校验，违反即打回）】
+1. 总长 ≤140 字符（含标点、换行）。
+2. 首行 ≤18 字符，直接给最强证据；不要以「您好」「你好」「请问」「我对」「想应聘」开头。
+3. 首行之后最多 4 行：匹配度 / 技术能力 → 高价值话术 → 收尾一句。
+4. 技术名词最多 4 个，只留与 JD 直接对应的（按候选人技术栈白名单）。
+5. 必含至少一条高价值话术：可随时到岗 / 连续实习 6 个月以上（或半年以上） / 每周出勤 5 天 / 抗压能力强，能适应快节奏开发环境。
+6. 不复述 JD 原句；不写「贵公司现在还招人吗」「非常感兴趣，希望」「贵公司发展」这类招聘空话。
+7. 不提简历里没有的公司、奖项、数字。文中「6 个月 / 5 天」等数字与候选人到岗承诺一致。
+8. 前 6 字不与候选人已有默认招呼语重叠。
+9. 方向（{direction}）与 JD 命中的技术栈不矛盾。
+
+【示例（正例，来自本人模板）】
+完整掌握后端技术体系，有 xxx 经验，可随时到岗、连续实习半年以上，每周出勤5天；抗压能力强，能适应快节奏开发环境
+xx大学(211)在读，具备 xxx 实战经验，可随时到岗、连续实习半年以上，每周出勤5天；
+
+【反例】熟悉Java并发编程，熟悉 SSM、SprintBoot、SpringCloud等框架，熟悉Redis、Rabbit MQ、Kafka 的使用（技术名词堆砌，HR 看不懂）
+
+【输出】只输出严格的 JSON（不要 markdown 代码块以外的多余文字）：
+{{"hook":"首行，≤18 字符","body":"剩余部分","text":"hook+\\n+body",
+ "matched":["JD 技术词 → 我的对应证据"],"why":"为什么这个开头对这家公司最强"}}
+text 的前 18 个字符必须正好等于 hook。"""
+
+    return prompt
+

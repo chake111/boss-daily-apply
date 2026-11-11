@@ -272,9 +272,13 @@ def main():
     base = mature + undated
 
     f = funnel(base, events, stages, replied)
+    custom_jds = sum(1 for r in base if r.get("greeting_src") == "jd")
     sp = supply_cap()
     actions = open_actions()
     head, steps = verdict(f, sp, actions, target)
+    if f["n"] >= 10 and (custom_jds / f["n"]) < 0.8:
+        steps.append("定制覆盖率偏低（%.0f%% < 80%%）：建议先按 JD 补充定制话术再冲量，避免全部退回通用桶"
+                     % ((custom_jds / f["n"]) * 100))
 
     def row(label, k, n, tip=""):
         if not n:
@@ -288,6 +292,7 @@ def main():
     lines.append("口径：分母 = 投递 >= %gh 或旧记录（无时间戳）；区间 = Wilson 95%%" % window)
     lines.append("")
     lines.append("转化链（n = %d）" % f["n"])
+    lines.append(row("定制话术", custom_jds, f["n"], "  按 JD 定制覆盖率"))
     lines.append(row("有回复", f["reply"], f["n"]))
     lines.append(row("有效推进", f["adv"], f["n"], "  要简历/网申/约面"))
     lines.append(row("面试", f["intro"], f["n"]))

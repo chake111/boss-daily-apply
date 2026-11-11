@@ -1,19 +1,19 @@
 ---
 name: boss-daily-apply
-description: "BOSS直聘每日批量投递 runbook：探供给→按证据强度配比→逐张走卡读 JD→AI 语义终审→当场投递→分批补发简历图与按方向话术→收尾出汇总页与回复台账。含 jobType=1902 实习通道、分页绕懒加载、机械否决库、Wilson 区间回复率报表。当用户说『投递』『今天投 N 份』『继续投』『BOSS 投简历』『看看回复』，或要在 BOSS直聘 上按城市/方向/届别批量投实习岗时使用。通过 CDP（浏览器自带调试协议，免装扩展）或 Kimi WebBridge 扩展驱动已登录的 Chromium 系浏览器（Chrome/Edge/Brave 均可，不要求 Chrome）；都没有时可用 ledger.py 手动记账。Daily BOSS Zhipin job-application runbook — supply probing, evidence-weighted allocation, one-card-at-a-time JD review, semantic gating, on-the-spot apply, staged resume-image follow-ups, and a Wilson-interval reply report."
-version: 3.0.0
+description: "BOSS直聘批量投递实习岗的完整流程：探供给、逐张读 JD 判方向、当场投递、补发简历图与按方向话术、出回复台账和回复率报表。用户在 BOSS直聘 上要批量投简历时使用——『投递』『今天投 N 份』『继续投』『BOSS 投简历』『看看回复』，或要按城市/方向/届别批量投实习岗。不用于改简历、写求职信、单个岗位咨询。Daily BOSS Zhipin batch application runbook."
 agent_created: true
 metadata:
   requires: "kimi-webbridge (127.0.0.1:10086), Python 3.9+"
   entrypoint: "scripts/_live_driver.py"
 ---
 
-# BOSS直聘每日投递 v3
+# BOSS直聘每日投递
 
 一张一张地判、够了就停的投递流程。核心不是"投得多"，是**投得对口且能算出效果**。
 
 > 约定：`$SKILL_DIR` = 本技能根目录（`SKILL.md` 所在目录）；
-> `$BOSS_WORKDIR` = 工作目录，默认 `~/WorkBuddy/BOSS/boss-data`，可用同名环境变量覆盖。
+> `$BOSS_WORKDIR` = 工作目录，默认 `~/.boss-daily-apply`（旧位置 `~/WorkBuddy/BOSS/boss-data`
+> 若存在则自动沿用），可用同名环境变量覆盖。
 > 所有状态文件都在工作目录，**不要在技能目录里写任何运行时文件**。
 
 ## 首次使用（必须走向导，别让人手改 JSON）
@@ -124,6 +124,8 @@ scripts/
   supply_probe.py   探供给，按证据强度出配额，写 supply.json（翻页未换内容会标 SAME）
   screen.py         机械否决（黑名单在 config/blacklist.json）
   send_img2.py      补发简历图 + 按方向一句话（WorkBuddy 用 CDP + --same-tab；第二标签实验性）
+  render_resume.py  逐岗位定制：配置 -> 单页 PNG，文件名按 BOSS 的 80 字节上限裁剪
+  apply_one.py      投一份并当场补发**这一份**的简历图（定制流程专用，见 references/per-job-tailoring.md）
   daily_close.py    收尾对账：谁还没送简历图 / 谁没发话术（只读，给逐条补发命令）
   acceptance.py     配置验收：判据在你真实配置下会不会恒真（开投前跑，16 项）
   reply_check.py    扫会话，出「待我动作」台账
@@ -142,6 +144,7 @@ scripts/
   selftest.py       自检 52 项（含定位器 JS、点击兜底、词表健康、headless 点击）
 references/
   runbook.md        11 步完整执行细节 —— 遇到分支先查这里
+  per-job-tailoring.md  逐岗位定制简历（全国投放）：城市码、命名、当场补发的完整循环
   pitfalls.md       26 条踩坑，照做即可
   metrics.md        回复率口径与 A/B 纪律
   judgment.md       判定标准 + 边界案例表
@@ -312,11 +315,19 @@ $DRV walk --next
    - `REJECT` → 直接 `reject`，**别 open**
    - `REVIEW` → `open` 看一眼
    - `PASS` → `open` 读 JD
-2. 读完 JD（连末尾 HR 活跃度一起读完，别 head 截断）→ 三选一：`deliver` / `reject` / 表面不沾边也要 `reject`
-3. **公司名只出现在 `open` 之后的右侧面板底部**（`公司名 · HR头衔`）。
+2. 读完 JD（连末尾 HR 活跃度一起读完，别 head 截断）→ 判定是否 APPROVE：
+   - 若 REJECT / 表面不沾边 → `$DRV reject <jobId>`。
+   - 若 APPROVE → **当场生成该岗位定制打招呼语（核心）**：
+     - 执行 `python "$SKILL_DIR/scripts/greeting.py" prompt --job <jobId>` 获取组装好的完整提示词；
+     - 智能体按方法论原文与事实白名单编写这一条专属话术（≤140字符，首行≤18且无套话）；
+     - 执行 `python "$SKILL_DIR/scripts/greeting.py" save --job <jobId> --text "..."` 执行 12 条机器硬指标校验并落盘；
+     - 校验打回时按改法提示削减字数或微调词句；若因特殊原因未通过，允许 `--force` 保存或直接投递退回通用桶（会在日志与汇报中标记）。
+3. 投递：`$DRV deliver <jobId> "<公司>" "<薪资>" "<行业>" "<方向>"`
+   （驱动会自动检查是否存在定制话术并记入台账 `greeting_src`；未定制会打出 `NOTE 未定制，补发将用方向桶`）。
+4. **公司名只出现在 `open` 之后的右侧面板底部**（`公司名 · HR头衔`）。
    不足 2 字、像岗位名、或被截断的，**一律不许 deliver**——空串会让补发脚本命中会话列表第一条，
    把简历发给无关的人且撤不回。
-4. 投满即停，不多投。每投满 5 份停下来补一次图（Step 6）。
+5. 投满即停，不多投。每投满 5 份停下来补一次图与话术（Step 6）。
 
 判定标准见 `references/judgment.md`，边界案例表照抄即可，别临场纠结。
 
@@ -356,8 +367,10 @@ BOSS_BACKEND=cdp python "$SKILL_DIR/scripts/send_img2.py" --pending --include-le
   并非零退出；只有真正 `NOT_FOUND` 才是公司级 SKIP。登录/验证出现时不得重试或绕过。
 - **按记录寻址，不按公司名**：同一家投了两个岗位时，用 `--job <jobId>` 才不会串档
   （按公司反查会拿到后投的那条，AI 岗收到数据岗的话术）。
-- 话术按 `direction` 映射到 `greetings.json` 的桶；**`keyword` 不参与匹配**（那是搜索词，不是岗位属性）。
-  方向没标或标了 `其他` 的走 `generic` 兜底，不会再落到 AI 文案。
+- **话术优先取该岗位的定制文件**：`send_img2.py` 优先查找 `<工作目录>/greetings/<jobId>.json`，
+  取到即发送专用定制话术（`src=jd`）；取不到才按 `direction` 映射到 `greetings.json` 的方向桶（`src=direction`）。
+  方向没标或标了 `其他` 的走 `generic` 兜底。
+  去重采用首 18 字与末 12 字双锚点指纹比对，杜绝定制文案重复补发或漏发。
 - **成功只认「会话条数变多」**（`IMG OK ... | 2->3 OK`）。`NOT_SENT` 就是没发出去；
   但先看会话列表预览有没有 `[图片]`——后台标签重渲染会让计数读到 0，详情见 `pitfalls.md` #15。
 - 每家处理完立即写一行 `greeting_log.jsonl`（`img_ok` / `msg_ok` / `status` 三态），
@@ -420,6 +433,26 @@ python "$SKILL_DIR/scripts/stage.py" list
 每组 n < 30 就写"样本不足"，别拿小样本比高低。
 
 ---
+
+## 变体 · 逐岗位定制简历（用户要求「按 JD 改简历再投」时）
+
+默认流程用 `resume/{variant}.png` 的固定变体图批量投、批量补发。用户要求逐岗位
+定制时，改走下面这条，两处关键差异是**当场补发**和**图与岗一一对应**。
+
+```bash
+python scripts/_live_driver.py walk --next                  # 呈现下一张
+python scripts/_live_driver.py open <jobId>                 # 读 JD
+python scripts/render_resume.py --config job.json --jobtitle 全栈开发实习生
+python scripts/apply_one.py --jid <jobId> --company <公司> --salary <薪资> \
+    --industry <行业> --direction 全栈开发 --jobtitle 全栈开发实习生 --img <上一步的 png>
+```
+
+- 全国投放的城市码是 `100010000`（少一个 0 会静默零结果），`target_city` 写「全国」。
+- 附件名限 **80 字节**（中文 3 字节/字），`render_resume.py` 按 姓名-岗位-学校-手机号 自动裁。
+- 投完必须重新导航回带 `city` 与 `jobType=1902` 的关键词页再 `walk --next`。
+- 溢出（退出码 3）先删内容，别把裁过的简历发出去。
+
+完整循环、失败处置与和默认流程的对照表见 `references/per-job-tailoring.md`。
 
 ## 硬停手条件（遇到任一立刻停，绝不绕过）
 

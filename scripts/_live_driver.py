@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Live one-by-one delivery driver (corrected flow: walk, never batch).
 
-DESIGN PRINCIPLE (user-corrected 2026-08-01, v6.5):
+DESIGN PRINCIPLE (user-corrected 2026-08-01):
   - NEVER open/read multiple JDs before acting. Process ONE card at a time.
   - The AGENT does the direction judgment (surface glance + JD read). The
     script only enforces the two unambiguous MECHANICAL hard gates:
@@ -17,7 +17,7 @@ Commands:
   walk                     (NO keyword) navigate to the BOSS RECOMMEND page
                            (https://www.zhipin.com/web/geek/jobs?ka=header-jobs),
                            reset cursor to top, and present ONLY the NEXT ONE
-                           card's surface (v6.9 single-card cursor — NEVER a
+                           card's surface (single-card cursor — NEVER a
                            batch list). THIS IS THE DEFAULT STARTING POINT.
                            Judge that ONE card: surface-hit -> open <jid> ->
                            deliver <jid>; surface-miss -> walk --next.
@@ -52,13 +52,13 @@ Commands:
                            Agent loop: reject -> `reject <jid>` then walk --next;
                            approve -> deliver -> walk --next (cursor auto-reset).
 
-AGENT STRATEGY (recommend-FIRST, HARD RULE since v6.8, user-mandated):
+AGENT STRATEGY (recommend-FIRST, HARD RULE, user-mandated):
   1. ALWAYS start with `walk` (no arg): fast glance of the visible recommend
      cards. Work them ONE BY ONE (surface glance -> open JD -> judge ->
      deliver/skip). NEVER batch-collect the whole feed.
   2. Scroll with `walk --more` to reach more recommend cards. When the LAST job
      is reached, --more auto-detects the bottom marker and sets
-     recommend_exhausted=true (the v6.8 "scroll to last job" rule) — this UNLOCKS
+     recommend_exhausted=true (the "scroll to last job" rule) — this UNLOCKS
      `walk <keyword>`. You may also call `walk --exhaust` to force it.
   3. ONLY after recommend_exhausted is true may you run `walk <keyword>` to
      backfill thin directions. The script BLOCKS any `walk <keyword>` while
@@ -83,7 +83,7 @@ from scripts.phase_stream import (
 from scripts.webbridge_client import (
     ProgressManager, extract_jobs, navigate, parse_salary_max,
 )
-from scripts.config_v3 import load_profile
+from scripts.config import load_profile
 
 # 工作目录：默认落在当前用户的 ~/WorkBuddy/BOSS/boss-data，可用 BOSS_WORKDIR 覆盖。
 # 代码与状态分离：脚本属于技能目录（可被 git 覆盖），状态属于工作目录（永不进版本库）。
@@ -124,7 +124,8 @@ def mechanical_ok(job, profile):
     """
     city = profile_city(profile)
     jc = job.get("city", "") or ""
-    if city and jc and city not in jc:
+    wildcard = city in ("全国", "不限", "任意")
+    if city and not wildcard and jc and city not in jc:
         return {"ok": False, "reason": f"city '{jc}' != '{city}'"}
     sal = parse_salary_max(job.get("salary", ""))
     mins = profile_min_salary(profile)
@@ -150,7 +151,7 @@ def save_state(s):
 
 
 # ───────────────────────────────────────────────────────────
-# v6.8 硬规则：推荐页必须滚动到最后一个岗位（彻底穷尽）后，才允许关键词搜索
+# 硬规则：推荐页必须滚动到最后一个岗位（彻底穷尽）后，才允许关键词搜索
 # ───────────────────────────────────────────────────────────
 _RECOMMEND_END_MARKERS = ["没有更多了", "已经到底", "到底啦", "没有更多职位", "没有职位了"]
 
@@ -217,7 +218,7 @@ def _delivered_jids():
 
 
 def _present_next():
-    """v6.9 核心：一次只呈现"下一张卡"的表面（标题/薪资/城市），绝不整页批量 dump。
+    """核心：一次只呈现"下一张卡"的表面（标题/薪资/城市），绝不整页批量 dump。
 
     设计动机（用户 2026-08-02 强制）：旧 walk 一次性 extract 出 ~15 张卡整列表返回，
     智能体"攥着整页清单"就跳序挑投（i4→i3→i11）。现改为游标制——智能体任何时刻
@@ -254,7 +255,7 @@ def _present_next():
         except Exception:
             pass
         jobs = extract_jobs()
-    # 触底检测（v6.8 / 2026-08-02 加固）：推荐页(kw为空)与关键词搜索页都检测
+    # 触底检测（2026-08-02 加固）：推荐页(kw为空)与关键词搜索页都检测
     # 底部文案。推荐页命中→置 recommend_exhausted 解锁关键词搜索；关键词页命中
     # →置 kw_exhausted，给智能体一个"该关键词已翻完"的干净信号（否则只靠
     # view_exhausted 反复 --more 会无限空转）。
@@ -325,7 +326,7 @@ def _present_next():
 def cmd_walk(keyword):
     profile = load_profile_cached()
     if keyword:
-        # ⛔ 硬规则（v6.8）：必须先穷尽推荐页（walk 无参 → 滚动到最后一个岗位，
+        # ⛔ 硬规则：必须先穷尽推荐页（walk 无参 → 滚动到最后一个岗位，
         # 且 state.recommend_exhausted==True），才允许关键词搜索。否则直接拒绝，
         # 不导航、不产出 surface，强制回到"推荐页优先"流程。
         st = walk_state()
@@ -353,7 +354,7 @@ def cmd_walk(keyword):
     else:
         # 推荐页优先（默认起点）：无关键词 → 停在 BOSS 推荐页，
         # 仅打印"当前可见"表面清单供智能体扫一眼（fast glance）。
-        # ✅ 绝不在这里滚动到底批量采集（v6.8 反模式，已删除）。
+        # ✅ 绝不在这里滚动到底批量采集（反模式，已删除）。
         # 逐条判读/投递由智能体 open/deliver 完成；滚动到末尾并标记穷尽
         # 由 walk --more（自动触底检测）或 walk --exhaust（显式）负责。
         cur = (evaluate("window.location.href") or "")
@@ -369,7 +370,7 @@ def cmd_walk(keyword):
         st["last_jid"] = ""
         # 保留 recommend_exhausted（由 --more/--exhaust 置位），不在此重置
         save_state(st)
-    # v6.9：不再批量打印整页 surface 列表；只呈现"下一张卡"（一次一张，游标制）。
+    # 不再批量打印整页 surface 列表；只呈现"下一张卡"（一次一张，游标制）。
     _present_next()
     return None
 
@@ -388,7 +389,35 @@ def cmd_open(jid):
     ok, method = click_card(jid, expect_js=expect, timeout=5.0)
     panel_ok = _panel_shows_job(jid, "")
     detail = evaluate("""(function(){var d=window.__bossDetail||document.querySelector('.job-detail-box')||document.querySelector('#main .job-detail');return d?d.innerText:'';})()""")
-    if not panel_ok:
+    if panel_ok:
+        try:
+            info = evaluate("""(function(){
+                var b = window.__bossDetail;
+                if (!b || !b.isConnected) return {};
+                var nameEl = b.querySelector('.job-name') || b.querySelector('h1') || b.querySelector('[class*=job-name]');
+                var compEl = b.querySelector('.company-name') || b.querySelector('.company-info a');
+                var salEl = b.querySelector('.salary') || b.querySelector('.job-salary');
+                return {
+                    title: nameEl ? nameEl.innerText.trim() : '',
+                    company: compEl ? compEl.innerText.trim() : '',
+                    salary: salEl ? salEl.innerText.trim() : ''
+                };
+            })()""") or {}
+            last_open_data = {
+                "jobId": jid,
+                "title": info.get("title", ""),
+                "company": info.get("company", ""),
+                "salary": info.get("salary", ""),
+                "industry": "",
+                "direction": "",
+                "detail": detail,
+                "at": time.time()
+            }
+            with open(paths.state("last_open.json"), "w", encoding="utf-8") as f:
+                json.dump(last_open_data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+    else:
         # 面板没切过去时，detail 读到的是上一张岗位的残留 JD。留着它，下游若只读
         # detail 不判 panel_ok，就会拿 A 的 JD 去判断 B——比读到空串危险得多。
         detail = ""
@@ -466,11 +495,16 @@ def cmd_deliver(jid, company="", salary="", industry="", direction=""):
             job["title"] = t
         except Exception:
             pass
+        custom_greeting_file = os.path.join(WORKDIR, "greetings", f"{jid}.json")
+        has_custom = os.path.exists(custom_greeting_file)
+        job["greeting_src"] = "jd" if has_custom else "direction"
+        if not has_custom:
+            print(f"NOTE 未定制，补发将用方向桶 (jobId={jid})", file=sys.stderr)
         pm = ProgressManager(os.path.join(WORKDIR, "stream_progress.json"))
         pm.load()
         pm.add_delivered(job.get("jobId"), job)
         pm.save()
-        # v6.9.1 修（顺序错乱根因）：投递会触发"立即沟通"弹窗→可能 wrong_path 导航回推荐页；
+        # 顺序错乱根因：投递会触发"立即沟通"弹窗→可能 wrong_path 导航回推荐页；
         # 即使正常路径，BOSS 也会把已投卡片从推荐列表移除并回流重排。若不清游标，下次
         # walk --next 会拿陈旧 idx/last_jid 续跑，漏掉重排后前移的未审卡片（即"跳过第N张跳到后面"）。
         # 故投递成功后强制游标回顶（idx=0, last_jid=""），rejected_jids/recommend_exhausted 保留。
@@ -483,7 +517,7 @@ def cmd_deliver(jid, company="", salary="", industry="", direction=""):
 
 
 def cmd_next():
-    """v6.9：推进游标并只呈现下一张卡的"表面"（不自动开 JD）。
+    """推进游标并只呈现下一张卡的"表面"（不自动开 JD）。
     表面是否命中由智能体判断；命中再显式 `open <jobId>` 读 JD。"""
     _present_next()
 
@@ -520,7 +554,7 @@ def cmd_more():
 
 
 def cmd_exhaust():
-    """v6.8 解锁命令：显式把推荐页滚动到最后一个岗位，标记 recommend_exhausted=true。
+    """解锁命令：显式把推荐页滚动到最后一个岗位，标记 recommend_exhausted=true。
 
     ✅ 只探测底部、设置标志 —— 不采集 / 不打印任何岗位列表（绝不批量采集）。
     滚动可能耗时（最多 cap 次），调用方应使用较长超时（如 240000ms）。

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """BOSS 直聘投递 · 投递原语库 + 收尾（实时单卡投递由 _live_driver.py 驱动）
 
-架构（v6.9 起）：
+架构：
   - _live_driver.py 负责「智能体交互层」：walk / open / deliver / reject 单卡游标，
     把每步动作交给浏览器，方向判断（该不该投）由 AI 语义完成，脚本只做两道
     机械硬门槛（城市 + 薪资下限），绝不硬编码岗位类型/行业关键词。
@@ -41,7 +41,7 @@ from scripts.webbridge_client import (
 # 页面定位统一走 locators：改版时只补一条策略，这里不用动。
 from scripts import locators as _loc
 _DETAIL_REF = _loc._DETAIL_REF
-from scripts.config_v3 import load_profile
+from scripts.config import load_profile
 from scripts.env_check import check_env
 
 RECOMMEND_URL = "https://www.zhipin.com/web/geek/jobs?ka=header-jobs"

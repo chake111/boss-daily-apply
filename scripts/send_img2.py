@@ -172,9 +172,40 @@ def load_variants():
         return {}
 
 
+MASTER_YAML = os.path.join(paths.resume_variants(), "master.yaml")
+_stale_warned = False
+_stale_hit = False
+
+
+def variant_source_stale():
+    """变体源比通用图旧 → 变体已经是过期简历，不能再发。
+
+    场景：简历改了新版，只把 PDF 转成 resume.png，忘了同步 master.yaml。
+    此时 --auto-img 的 A 组仍会用旧 master.yaml 现场渲染，于是同一轮投递里
+    一半公司收到新版、一半收到旧版，两版连项目时间都不一样——候选人自己都
+    说不清哪份是真的。这种错不会报任何异常，只会让面试官问出对不上的细节。
+    判据取 mtime：同步过 master.yaml 之后它自然不再旧，不需要额外开关。
+    """
+    try:
+        if not (os.path.exists(MASTER_YAML) and os.path.exists(IMG)):
+            return False
+        return os.path.getmtime(MASTER_YAML) < os.path.getmtime(IMG) - 1
+    except OSError:
+        return False
+
+
 def render_for(variant, company):
     """调 render.py 出一张定制图；失败返回空串（调用方退回通用图）。"""
+    global _stale_warned, _stale_hit
+
     if not os.path.exists(RENDER):
+        return ""
+    if variant_source_stale():
+        _stale_hit = True
+        if not _stale_warned:
+            print("WARN 变体源 master.yaml 比 resume.png 旧 → 本轮全部改发通用图。"
+                  "要恢复分方向定制，先把 master.yaml 同步成新版简历。", flush=True)
+            _stale_warned = True
         return ""
     try:
         r = subprocess.run([sys.executable, RENDER, "--variant", variant,
@@ -217,7 +248,9 @@ def choose_image(rec):
         return IMG, "A:no-variant"       # A 组但这个方向还没有变体
     png = render_for(variant, company)
     if not png:
-        return IMG, "A:render-failed"
+        # 分开标注：过期是「本该发变体但源太旧」，渲染失败是「环境问题」，
+        # 收尾对账时两种要采取的动作不一样。
+        return IMG, ("A:variant-stale" if _stale_hit else "A:render-failed")
     return png, "A:" + variant
 
 
@@ -254,20 +287,31 @@ def load_records(limit=150):
 
 
 def bucket_text(b):
-    """v1 只有 text，v2 有 text(成品) 与 lead(中间量)。任一存在即可，绝不 KeyError。"""
+    """配置里 text 是成品、lead 是中间量，任一存在即可，绝不 KeyError。"""
     return b.get('text') or b.get('lead') or ''
 
 
 def pick_greeting(rec):
-    """按**投递记录**选桶。
+    """按**岗位定制文件**或**投递记录**选桶。
 
-    以前是「先命中先用」，导致「AI应用开发（后端/数据方向）」被 java 桶抢先命中
-    （因为 java 的 match 里有泛化的"后端"）。现在改成按词权重累加：
-    具体技术词（Java/Python/AI/Agent/大模型/前端）权重高，泛化词（后端/数据/应用开发）权重低，
-    分数最高且 >0 的桶胜出，全 0 才走 default。
+    优先：工作目录下的 greetings/<jobId>.json 定制话术（gid='jd'）；
+    取不到时退回原有方向桶逻辑。
     """
-    cfg = json.load(open(GREET, encoding='utf-8'))
     rec = rec or {}
+    jid = rec.get('jobId') or ''
+    if jid:
+        try:
+            custom_path = os.path.join(paths.workdir(), 'greetings', f'{jid}.json')
+            if os.path.exists(custom_path):
+                with open(custom_path, 'r', encoding='utf-8') as f:
+                    cdata = json.load(f)
+                custom_text = cdata.get('text')
+                if custom_text and custom_text.strip():
+                    return 'jd', custom_text
+        except Exception:
+            pass
+
+    cfg = json.load(open(GREET, encoding='utf-8'))
 
     # ① direction 是投递时人工标的，直接映射最准
     dmap = cfg.get('direction_map') or {}
@@ -329,14 +373,52 @@ def greeting_prefixes(path=None):
     return out
 
 
-def text_already_sent(my_text, prefixes):
-    """这段会话文字里，是否已经有我发过的方向文案。
+def greeting_anchors(target_text=None, path=None):
+    """返回用于判断'话术是否已发过'的双锚点或桶指纹。
 
-    单独抽出来是为了能被验收脚本直接调用：这个判据一旦在真实配置下恒真，
-    整个补发会静默失效（每家都 SKIP 已发全），而界面和日志都看不出来。
+    如果指定了 target_text，返回首 18 字与末 12 字双锚点（去空格）；
+    否则退回各桶文案前缀（保持兼容）。
     """
-    t = (my_text or "").replace(" ", "")
-    return any((p or "").replace(" ", "") and p.replace(" ", "") in t for p in prefixes)
+    anchors = list(greeting_prefixes(path))
+    if target_text and target_text.strip():
+        clean = target_text.replace(" ", "").replace("\n", "").replace("\r", "")
+        if len(clean) >= 12:
+            head = clean[:18]
+            tail = clean[-12:]
+            if head and head not in anchors:
+                anchors.append(head)
+            if tail and tail not in anchors:
+                anchors.append(tail)
+        elif clean and clean not in anchors:
+            anchors.append(clean)
+    return anchors
+
+
+def text_already_sent(my_text, prefixes=None, target_text=None):
+    """这段会话文字里，是否已经有我发过的方向文案或定制文案。
+
+    双锚点判据：如果传入 target_text，只要 my_text 命中 target_text[:18]
+    或 target_text[-12:]（均去空格），即判为已发送；
+    同时如果传入 prefixes，其中任一前缀在 my_text 中也判为已发送。
+    """
+    t = (my_text or "").replace(" ", "").replace("\n", "").replace("\r", "")
+    if not t:
+        return False
+    if target_text and target_text.strip():
+        ct = target_text.replace(" ", "").replace("\n", "").replace("\r", "")
+        if len(ct) >= 12:
+            head = ct[:18]
+            tail = ct[-12:]
+            if (head and head in t) or (tail and tail in t):
+                return True
+        elif ct and ct in t:
+            return True
+    if prefixes:
+        for p in prefixes:
+            clean_p = (p or "").replace(" ", "").replace("\n", "").replace("\r", "")
+            if clean_p and clean_p in t:
+                return True
+    return False
 
 
 def send_text(msg):
@@ -943,6 +1025,7 @@ def main():
             continue
 
         gid, gtext = pick_greeting(rec)
+        src = "jd" if gid == "jd" else "direction"
 
         ok, header = open_conv_for(company, rec_title, job_id=jid)
         if not ok:
@@ -957,7 +1040,7 @@ def main():
                 log.append({"n": i, "company": company, "status": "SKIP",
                             "why": "NOT_FOUND:" + reason})
                 log_greeting({"event": "skip", "company": company, "jobId": jid or None,
-                              "title": rec_title, "bucket": gid, "status": "SKIP",
+                              "title": rec_title, "bucket": gid, "src": src, "status": "SKIP",
                               "why": "NOT_FOUND:" + reason})
                 print(i, company, "SKIP NOT_FOUND", reason, flush=True)
                 continue
@@ -972,7 +1055,7 @@ def main():
                 return abort_batch(log, code, why)
             log.append({"n": i, "company": company, "status": "SKIP", "why": "NOT_FOUND"})
             log_greeting({"event": "skip", "company": company, "jobId": jid or None,
-                          "title": rec_title, "bucket": gid, "status": "SKIP",
+                          "title": rec_title, "bucket": gid, "src": src, "status": "SKIP",
                           "why": "NOT_FOUND"})
             print(i, company, "SKIP NOT_FOUND", flush=True)
             continue
@@ -980,7 +1063,7 @@ def main():
         if hstate == "TITLE_MISMATCH":
             log.append({"n": i, "company": company, "status": "SKIP", "why": "标题不符:" + hdetail})
             log_greeting({"event": "skip", "company": company, "jobId": jid or None,
-                          "title": rec_title, "bucket": gid, "status": "SKIP",
+                          "title": rec_title, "bucket": gid, "src": src, "status": "SKIP",
                           "why": "标题不符:" + str(hdetail)[:60]})
             print(i, company, "SKIP 标题不符:", hdetail, flush=True)
             continue
@@ -997,9 +1080,9 @@ def main():
         my_imgs = int(S.ev(MY_IMG_JS) or 0)
         my_text = (S.ev(MY_TEXT_JS) or "").replace(" ", "")
         already_img = my_imgs > 0
-        # 判据抽到函数里：空串恒真、与默认招呼语撞车这两类错都出在这个表达式上，
-        # 现在它有了独立名字，验收脚本可以直接对着真实配置跑它。
-        already_msg = text_already_sent(my_text, prefixes)
+        # 双锚点校验：传入当前岗位的 gtext 配合全局桶指纹
+        anchors = greeting_anchors(target_text=gtext)
+        already_msg = text_already_sent(my_text, prefixes=anchors, target_text=gtext)
 
         if already_img and already_msg:
             log.append({"n": i, "company": company, "status": "SKIP", "why": "图+话术都已发过"})
@@ -1007,7 +1090,7 @@ def main():
             # 记 skip 的话 greeting_index 会把它滤掉，对账就会把这条永远当成没发过。
             log_greeting({"event": "send", "company": company, "jobId": jid or None,
                           "title": rec_title, "direction": rec.get("direction") or "",
-                          "bucket": gid, "text": gtext, "img_ok": True, "msg_ok": True,
+                          "bucket": gid, "src": src, "text": gtext, "img_ok": True, "msg_ok": True,
                           "status": "OK", "why": "already_complete"})
             print(i, company, "SKIP 已发全", flush=True)
             continue
@@ -1023,7 +1106,7 @@ def main():
                 log.append({"n": i, "company": company, "status": "FAIL", "why": "取图失败"})
                 log_greeting({"event": "send", "company": company, "jobId": jid or None,
                               "title": rec_title, "direction": rec.get("direction") or "",
-                              "bucket": gid, "text": gtext, "img_ok": False, "msg_ok": False,
+                              "bucket": gid, "src": src, "text": gtext, "img_ok": False, "msg_ok": False,
                               "img_res": "STAGE_FAIL", "msg_res": "OFF", "status": "FAIL"})
                 print(i, company, "FAIL stage", flush=True)
                 continue
@@ -1060,7 +1143,7 @@ def main():
                             "why": "图未入库:%s img %d->%d" % (r, imgs0, imgs1)})
                 log_greeting({"event": "send", "company": company, "jobId": jid or None,
                               "title": rec_title, "direction": rec.get("direction") or "",
-                              "bucket": gid, "text": gtext, "img_ok": False, "msg_ok": False,
+                              "bucket": gid, "src": src, "text": gtext, "img_ok": False, "msg_ok": False,
                               "img_res": img_res, "msg_res": "OFF", "status": "FAIL"})
                 continue
         else:
@@ -1082,7 +1165,7 @@ def main():
                     "img": img_res, "msg": msg_res, "bucket": gid})
         log_greeting({"event": "send", "company": company, "jobId": jid or None,
                       "title": rec_title, "direction": rec.get("direction") or "",
-                      "bucket": gid, "text": gtext, "img_ok": bool(img_ok),
+                      "bucket": gid, "src": src, "text": gtext, "img_ok": bool(img_ok),
                       "msg_ok": bool(msg_ok), "img_res": img_res, "msg_res": msg_res,
                       "status": status})
         time.sleep(0.8)

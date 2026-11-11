@@ -23,7 +23,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from scripts import metrics, paths  # noqa: E402
 from scripts.send_img2 import (  # noqa: E402
-    bucket_text, greeting_prefixes, pick_greeting, text_already_sent)
+    bucket_text, greeting_prefixes, greeting_anchors, pick_greeting, text_already_sent)
 
 VERBOSE = "-v" in sys.argv
 WORKDIR = paths.workdir()
@@ -173,6 +173,90 @@ def main():
         asrt(sum(nums) == len(dated), "缺口合计 %d ≠ 投递 %d，有记录没被归类" % (sum(nums), len(dated)))
         return lines[0].strip()
     check("每条投递都有归类", gap_total)
+
+    print("\n[5] 岗位定制打招呼语与判据")
+    greetings_dir = os.path.join(WORKDIR, "greetings")
+    custom_files = []
+    if os.path.exists(greetings_dir):
+        custom_files = [os.path.join(greetings_dir, f) for f in os.listdir(greetings_dir) if f.endswith(".json")]
+
+    if not custom_files:
+        # 测试或空白工作目录下自动写入 2 条标准定制样本供验收
+        os.makedirs(greetings_dir, exist_ok=True)
+        sample1 = {
+            "jobId": "test_acc_01",
+            "hook": "中南大学在读2027届",
+            "body": "扎实掌握Java与MySQL，具备实际高并发项目开发经验。\n可随时到岗、连续实习6个月以上，每周出勤5天；抗压能力强，能适应快节奏开发环境。\n对该岗位很感兴趣，期待进一步沟通！",
+            "text": "中南大学在读2027届\n扎实掌握Java与MySQL，具备实际高并发项目开发经验。\n可随时到岗、连续实习6个月以上，每周出勤5天；抗压能力强，能适应快节奏开发环境。\n对该岗位很感兴趣，期待进一步沟通！",
+            "created_at": "2026-11-12T00:00:00",
+            "check": {"passed": True, "score": "12/12"}
+        }
+        sample2 = {
+            "jobId": "test_acc_02",
+            "hook": "拿过省大数据赛银奖",
+            "body": "独立交付过Spring Boot系统，熟练Redis缓存与行锁设计。\n2027届在校生，可随时到岗、连续实习6个月以上，每周出勤5天；抗压能力强。\n希望能加入贵公司参与研发！",
+            "text": "拿过省大数据赛银奖\n独立交付过Spring Boot系统，熟练Redis缓存与行锁设计。\n2027届在校生，可随时到岗、连续实习6个月以上，每周出勤5天；抗压能力强。\n希望能加入贵公司参与研发！",
+            "created_at": "2026-11-12T00:00:00",
+            "check": {"passed": True, "score": "12/12"}
+        }
+        for s in (sample1, sample2):
+            fp = os.path.join(greetings_dir, f"{s['jobId']}.json")
+            with open(fp, "w", encoding="utf-8") as f:
+                json.dump(s, f, ensure_ascii=False, indent=2)
+            custom_files.append(fp)
+
+    def check_custom_pickup():
+        asrt(bool(custom_files), "未找到任何定制话术文件（greetings/*.json）")
+        for fp in custom_files[:5]:
+            with open(fp, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            jid = d.get("jobId")
+            gid, text = pick_greeting({"jobId": jid})
+            asrt(gid == "jd", "已定制岗位 %s pick_greeting 返回 bucket_id 为 %s，非 jd" % (jid, gid))
+            asrt(text == d.get("text"), "已定制岗位 %s 返回文案与文件不一致" % jid)
+        return "%d 份定制文案均可准确取用" % min(5, len(custom_files))
+    check("定制文案可取（pick_greeting 优先返回 jd 且内容一致）", check_custom_pickup)
+
+    def check_non_always_true():
+        sample_texts = [
+            "您好，请问在招吗",
+            "hr 您好，我已发送了简历",
+            "请问什么时候可以面试",
+            "这是我的个人简历，请查收"
+        ]
+        false_positives = []
+        for st in sample_texts:
+            if text_already_sent(st, prefixes=prefixes):
+                false_positives.append(st)
+        asrt(not false_positives, "无关文本被误判为已发文案：%s" % false_positives)
+        return "无无关文本误判为已发"
+    check("判据不恒真（无关会话不会被误判为已发全）", check_non_always_true)
+
+    def check_non_always_false():
+        asrt(bool(custom_files), "无定制文件可供校验")
+        for fp in custom_files[:5]:
+            with open(fp, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            t = d.get("text") or ""
+            anchors = greeting_anchors(target_text=t)
+            asrt(text_already_sent(t, prefixes=anchors, target_text=t),
+                 "定制话术未命中自己的双锚点：%s" % fp)
+        return "%d 条定制文案自测均能准确识别已发" % min(5, len(custom_files))
+    check("判据不恒假（定制话术自身能被双锚点识别）", check_non_always_false)
+
+    def check_length_boundary():
+        asrt(bool(custom_files), "无定制文件可供校验")
+        for fp in custom_files:
+            with open(fp, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            t = d.get("text") or ""
+            asrt(len(t) <= 140, "文件 %s 总长 %d 超过 140 字符" % (os.path.basename(fp), len(t)))
+            first_line = [l.strip() for l in t.splitlines() if l.strip()][0] if t else ""
+            asrt(len(first_line) <= 18, "文件 %s 首行 %d 超过 18 字符" % (os.path.basename(fp), len(first_line)))
+            asrt(not any(first_line.startswith(p) for p in ("您好", "你好", "请问", "我对", "想应聘")),
+                 "文件 %s 首行包含禁忌套话" % os.path.basename(fp))
+        return "%d 个定制文件全部符合 140/18 硬指标" % len(custom_files)
+    check("长度不越界（目录下所有 greetings/*.json 全部 ≤140 / 首行 ≤18）", check_length_boundary)
 
     print("\n" + "─" * 52)
     print("通过 %d / %d" % (len(ok), len(ok) + len(bad)))

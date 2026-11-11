@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WebBridge HTTP 客户端 v4 — 共享模块
+WebBridge HTTP 客户端 — 共享模块
 
 所有 BOSS 脚本通过此模块与 Kimi WebBridge 通信。
 提供 decrypt_salary、extract_jobs、handle_popup 等 Boss直聘专用工具函数。
@@ -8,15 +8,15 @@ WebBridge HTTP 客户端 v4 — 共享模块
 核心设计:
   - 全局单一 SESSION，所有脚本复用同一个标签页
   - api() 自带 3 次重试
-  - extract_jobs() 内置 Vue $props.data 提取 + DOM 兜底（v4 新增）
+  - extract_jobs() 内置 Vue $props.data 提取 + DOM 兜底
   - handle_popup() 处理"好"/"确定"弹窗（含第120份投递弹窗）
   - ProgressManager 管理断点续传
 
-v4 变更 (2026-07-30):
-  - extract_jobs() 增加 DOM 兜底：Vue __vue__ 私有 API 失效时，
+容错约定:
+  - extract_jobs() 的 DOM 兜底：Vue __vue__ 私有 API 失效时，
     改用已验证的 DOM 选择器 (.job-name/.boss-name/.company-location) 提取
-  - clean_pid_files() 只清桥自己的 pid 文件（早期版本还会误删宿主的 ~/.workbuddy/*.pid）
-  - register_signal_guard() 增加 SIGINT（Windows 亦可捕获）
+  - clean_pid_files() 只清桥自己的 pid 文件，不要碰宿主的 ~/.workbuddy/*.pid
+  - register_signal_guard() 捕获 SIGINT（Windows 亦可）
 
 用法:
     from scripts.webbridge_client import (
@@ -366,7 +366,7 @@ def scroll_page(session=SESSION):
 
 # ═══════════════════════════════════════════════════════════
 # 页面反馈检测 / 异常检测 / 标签页独占锁
-# （v4.1 新增 — 落实"每步操作后必须回读页面确认反馈/跳转，
+# （落实"每步操作后必须回读页面确认反馈/跳转，
 #   发现页面异常立即停脚本"的硬性纪律）
 # ═══════════════════════════════════════════════════════════
 
@@ -590,7 +590,7 @@ _EXTRACT_JOBS_VUE_JS = r"""
 })()
 """
 
-# DOM 兜底提取（v4 新增）：Vue 私有 API 失效时改用已验证选择器
+# DOM 兜底提取：Vue 私有 API 失效时改用已验证选择器
 #   公司名 → .boss-name  （不是 .company-name）
 #   地区   → .company-location（不是 .job-area）
 #   标题   → a.job-name（含 href /job_detail/{jobId}.html）
@@ -642,7 +642,7 @@ def _parse_jobs(raw):
 def extract_jobs(session=SESSION):
     """从当前页面提取所有岗位卡片。
 
-    策略 (v4): 先尝试 Vue $props.data（字段最完整），
+    策略：先尝试 Vue $props.data（字段最完整），
     若返回为空（Vue 私有 API 失效/页面结构变化），回退到 DOM 选择器提取。
     薪资已解密，并按 jobId 去重。
     """
@@ -837,11 +837,12 @@ class ProgressManager:
             'company': job.get('company', ''),
             'salary': job.get('salary', ''),
             'industry': job.get('industry', ''),
-            # v6.9.4：direction/city 之前被丢掉，导致汇总页无法按方向分组；
+            # direction/city 之前被丢掉，导致汇总页无法按方向分组；
             # delivered_at 之前完全缺失，导致「今日累计/回复率」这类按天统计做不了。
             'direction': job.get('direction', ''),
             'city': job.get('city', ''),
             'keyword': job.get('keyword', ''),
+            'greeting_src': job.get('greeting_src', ''),
             'delivered_at': job.get('delivered_at') or datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'result': 'success',
         })
@@ -1084,7 +1085,7 @@ class WebBridge:
         return ensure_active_tab(self.session, timeout_wait)
 
     def verify_login(self, username=None):
-        """通用登录态检测（v5 泛用化：不再绑定特定用户名）。
+        """通用登录态检测（不绑定特定用户名）。
 
         - username 传入具体名字时：兼容旧用法，检测页面是否含该名字（已登录用户）。
         - username 为 None（默认）：检测通用登录态——
@@ -1138,16 +1139,3 @@ class WebBridge:
         return None
 
 
-# ═══════════════════════════════════════════════════════════
-# 版本信息
-# ═══════════════════════════════════════════════════════════
-
-__version__ = "4.0.0"
-__updated__ = "2026-07-30"
-__changes__ = """
-v4.0.0 (2026-07-30):
-  - extract_jobs() 增加 DOM 兜底提取（Vue __vue__ 私有 API 失效时自动切换）
-  - clean_pid_files() 清理路径改为 ~/.workbuddy/*.pid（迁移自 TRAE ~/.trae-cn）
-  - register_signal_guard() 增加 SIGINT 捕获
-  - 所有调用脚本改为相对 __file__ 动态解析 SKILL_DIR，摆脱硬编码路径
-"""

@@ -121,7 +121,7 @@ def _own_prefixes():
     except Exception:
         pass
     try:
-        from scripts.config_v3 import load_profile
+        from scripts.config import load_profile
         p = load_profile() or {}
         if p.get("own_greeting_prefix"):
             out.append(str(p["own_greeting_prefix"]))

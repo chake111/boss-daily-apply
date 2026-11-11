@@ -39,7 +39,7 @@ import urllib.parse
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from scripts import paths  # noqa: E402
 from scripts.webbridge_client import evaluate, navigate  # noqa: E402
-from scripts.config_v3 import load_profile  # noqa: E402
+from scripts.config import load_profile  # noqa: E402
 
 OUT = paths.state("supply.json")
 

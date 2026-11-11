@@ -49,7 +49,8 @@ python scripts/_live_driver.py walk           # 开始逐张走卡
 
 ```bash
 python scripts/install.py --list                  # 你的智能体该装哪
-python scripts/install.py --target claude         # workbuddy / cursor / codex / plain
+python scripts/install.py --target claude         # workbuddy / cursor / codex / antigravity / plain
+python scripts/install.py --target antigravity    # Google Antigravity：入口指针，正文跟仓库走
 python scripts/bootstrap.py                       # 只建目录和配置，不装任何东西
 python scripts/onboard.py --yes --city 深圳 --year 2027 \
     --direction "Java 后端开发实习" --resume "D:/简历.pdf"
@@ -206,9 +207,10 @@ scripts/
   keyword_health.py 词表健康：连续两轮挖空的词自动跳过
   supply_probe.py   供给探测 + 按证据强度出配额（默认 jobType=1902）
   screen.py         机械否决
-  send_img2.py      补发简历图 + 按方向一句话（CDP + --same-tab）
+  send_img2.py      补发简历图 + 按方向一句话（CDP + --same-tab，优先发送按 JD 定制话术）
+  greeting.py       按岗位 JD 组装提示词、12 条机器硬指标校验、保存单岗位专属话术
   daily_close.py    收尾对账：谁没送图 / 谁没发话术（只读，给逐条补发命令）
-  acceptance.py     配置验收 16 项（selftest 管代码，它管配置）
+  acceptance.py     配置与话术验收 20 项（selftest 管代码，它管配置、台账与双锚点判据）
   reply_check.py    扫会话 → 「待我动作」台账
   stage.py          进度台账：约面 / 一面 / 二面 / offer（会话里看不出来的那一段）
   decide.py         决策看板：转化链 + 断点 + 今日上限（看下一步用这个）
@@ -221,15 +223,16 @@ scripts/
   playwright_backend.py  Playwright 后端（连调试端口，点击与上传交给库）
   browser.py        浏览器适配层（检测 / 启动，不限 Chrome）
   webbridge_client.py    后端路由 + 底层页面操作
-  config_v3.py      档案加载、薪资解析、语义终审的 prompt 组装
+  config.py      档案加载、薪资解析、语义终审的 prompt 组装
   metrics.py        指标口径：公司名归一、事件匹配、Wilson 区间
   paths.py          路径解析（代码与状态分离）
   bootstrap.py      首次安装：建目录、拷配置、检查简历图
-  install.py        装到 workbuddy / claude / cursor / codex，或纯文本用法
+  install.py        装到 workbuddy / claude / cursor / codex / antigravity，或纯文本用法
   cleanup.py        清临时产物（白名单，台账一律不碰）
   selftest.py       自检 54 项（含一次 headless 浏览器点击；--no-browser 跳过）
   send_img.py       内部库（旧补发入口已废弃，send_img2 复用其函数）
 references/
+  greeting-playbook.md 打招呼语方法论原文（逐字，唯一权威来源）
   runbook.md        11 步完整执行细节 —— 遇到分支先查这里
   judgment.md       判定标准 + 22 条边界案例（唯一权威判定表）
   pitfalls.md       42 条踩坑（现象 → 根因 → 处置）
@@ -326,6 +329,8 @@ WebBridge 也没有 focus/raise 动作。`hidden=true` 不是停手理由，是�
 | BOSS 改版了怎么办 | 先跑 `env_check.py` 看「页面结构」是否红灯，再去 `scripts/locators.py` 补一条策略，业务代码不动 |
 | 能多账号并行吗 | 能，每个实例一个 `BOSS_WORKDIR` |
 | 没有智能体能用吗 | 能，`ledger.py` 记账 + 手动判卡，报表口径完全一致 |
+| 在 Google Antigravity 里怎么用 | `install.py --target antigravity`，它会在 `~/.gemini/config/skills/` 放一个入口指针；开新会话后 `/boss-daily-apply` 可手动调起，也会按 `description` 自动触发 |
+| 打招呼语怎么按 JD 定制 | Step 4 读完 JD 后跑 `greeting.py prompt` 组装提示词，智能体写好后跑 `greeting.py save` 经过 12 条机器硬指标校验落盘；补发时 `send_img2.py` 优先发送定制话术，取不到才退回通用方向桶 |
 
 ---
 

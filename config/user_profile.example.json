@@ -30,6 +30,15 @@
     "用不上": 0.00
   },
   "own_greeting_prefix": "【你在 BOSS 设置里那套默认招呼语的开头 8~12 个字。reply_check 靠它判断「最后一条是不是我发的」，留空会让回复率虚高。】",
+  "greeting_facts": {
+    "_note": "可选，用于按岗位 JD 生成定制打招呼语的事实白名单。未配置时将从 experience 字段自动提取。",
+    "school": "中南大学（211）",
+    "grade": "2027 届",
+    "internships": ["字节跳动 后端实习"],
+    "awards": ["蓝桥杯国一", "软件设计师", "英语六级"],
+    "stack": ["Java", "Spring Boot", "Redis", "MySQL", "AI 编程工具"],
+    "commitment": { "available_now": true, "months": 6, "days_per_week": 5 }
+  },
   "prefer_no_big_company": false,
   "prefer_no_headhunter": false,
   "accept_note": "在校生，可实习，每周到岗天数可与 HR 沟通；实习薪资不设硬性下限。"
