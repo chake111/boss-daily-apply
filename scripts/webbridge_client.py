@@ -464,26 +464,39 @@ def _list_other_boss_script_pids():
     仅靠进程名不够，必须看命令行含本项目的入口文件名，避免误杀用户其它 python 程序。
     早期版本写死了 `boss-zhipin-deliver/scripts/phase`，换个安装目录或换 skill 名
     就永远匹配不到，标签页互抢的问题会静默回来。
+
+    这里必须同时匹配 `send_followup.py` 和它的兼容壳 `send_img2.py`：用旧命令起的长任务，
+    进程命令行里是壳的名字，只认新名会让 `--same-tab` 前的清理漏掉它，于是两个进程抢标签页
+    ——表现是「莫名其妙发到错的会话」，而不是报错。壳删掉后这两个名字可以收敛成一个。
     """
     me = os.getpid()
     if not sys.platform.startswith("win"):
         # macOS / Linux：pgrep -f 直接按命令行匹配，比 Get-CimInstance 简单得多
         try:
             r = subprocess.run(
-                ["pgrep", "-f", "_live_driver.py|phase_stream.py|send_followup.py"],
+                ["pgrep", "-f", "_live_driver.py|phase_stream.py|send_followup.py|send_img2.py"],
                 capture_output=True, text=True, timeout=20)
             return [int(x) for x in r.stdout.split() if x.isdigit() and int(x) != me]
         except Exception:
             return []
     try:
-        ps = (r"Get-CimInstance Win32_Process -Filter \"Name='python.exe'\""
-              r" | Where-Object { ($_.CommandLine -like '*_live_driver.py*'"
-              r" -or $_.CommandLine -like '*phase_stream.py*'"
-              r" -or $_.CommandLine -like '*send_followup.py*')"
-              r" -and $_.ProcessId -ne %d }"
-              r" | Select-Object -ExpandProperty ProcessId") % me
-        out = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
-                             capture_output=True, text=True, timeout=20).stdout
+        # 三处都不能省：
+        # 1. -Filter 里用 PS 自己的引号规则（外层双引号、内层单引号）。写 \" 是 JSON/C 的习惯，
+        #    PowerShell 只认反引号，会把整个过滤器当非法值，抛中文错误——stdout 空、
+        #    stderr 是 GBK，接着按 UTF-8 解码抛异常，被 except 吞成 []，于是清理永远"成功但没事干"。
+        # 2. 先把控制台输出改成 UTF-8，再取字节自己解码，不依赖系统代码页。
+        # 3. 不传 text=True：中文 Windows 上默认按 UTF-8 解 GBK 会炸在 reader 线程里。
+        ps = ("[Console]::OutputEncoding=[Text.Encoding]::UTF8;"
+              "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\""
+              " | Where-Object { ($_.CommandLine -like '*_live_driver.py*'"
+              " -or $_.CommandLine -like '*phase_stream.py*'"
+              " -or $_.CommandLine -like '*send_followup.py*'"
+              " -or $_.CommandLine -like '*send_img2.py*')"
+              " -and $_.ProcessId -ne %d }"
+              " | Select-Object -ExpandProperty ProcessId") % me
+        r = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                           capture_output=True, timeout=20)
+        out = r.stdout.decode("utf-8", "ignore") or r.stdout.decode("gbk", "ignore")
         return [int(x.strip()) for x in out.split() if x.strip().isdigit()]
     except Exception:
         return []
