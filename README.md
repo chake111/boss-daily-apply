@@ -71,7 +71,7 @@ python scripts/selftest.py --no-browser           # 54 项自检，跳过真实�
 | 2 配比 | 按 `config/supply_mix.json` 把 N 份分到各方向，给出投放顺序 | 同上 | `supply.json` |
 | 3 逐张判 | `walk` 只给一张卡 → `screen` 机械红线 → `open` 读完整 JD → 语义终审 | `_live_driver.py walk / open` | `walk_state.json` |
 | 4 当场投 | 公司名必须取自右侧面板底部，短于 2 字或像岗位名一律不投 | `_live_driver.py deliver` | `stream_progress.json` |
-| 5 补图补话 | 每满 5 份，补发简历长图 + 按方向的一句话 | `send_img2.py 5 --msg --same-tab` | `greeting_log.jsonl` |
+| 5 补图补话 | 每满 5 份，补发简历长图 + 按方向的一句话 | `send_followup.py 5 --msg --same-tab` | `greeting_log.jsonl` |
 | 6 收尾 | 对账缺口 → 决策看板 → 汇总页 → 当日台账 → 待我动作 | `daily_close.py` / `decide.py` / `phase_stream.py` / `ledger.py daily` | `决策看板.md` / `投递汇总.html` |
 
 在 WorkBuddy 沙箱里，涉及浏览器的命令一律再加 `BOSS_BACKEND=cdp`（表格为可读性省略）。
@@ -207,7 +207,7 @@ scripts/
   keyword_health.py 词表健康：连续两轮挖空的词自动跳过
   supply_probe.py   供给探测 + 按证据强度出配额（默认 jobType=1902）
   screen.py         机械否决
-  send_img2.py      补发简历图 + 按方向一句话（CDP + --same-tab，优先发送按 JD 定制话术）
+  send_followup.py  补发简历图 + 按方向一句话（CDP + --same-tab，优先发送按 JD 定制话术）
   greeting.py       按岗位 JD 组装提示词、12 条机器硬指标校验、保存单岗位专属话术
   daily_close.py    收尾对账：谁没送图 / 谁没发话术（只读，给逐条补发命令）
   acceptance.py     配置与话术验收 20 项（selftest 管代码，它管配置、台账与双锚点判据）
@@ -230,7 +230,9 @@ scripts/
   install.py        装到 workbuddy / claude / cursor / codex / antigravity，或纯文本用法
   cleanup.py        清临时产物（白名单，台账一律不碰）
   selftest.py       自检 54 项（含一次 headless 浏览器点击；--no-browser 跳过）
-  send_img.py       内部库（旧补发入口已废弃，send_img2 复用其函数）
+  browser_ops.py    内部库（旧补发入口已废弃，send_followup 复用其函数）
+  send_img.py       兼容壳 → browser_ops.py（旧命令仍可用，2026-12-10 删除）
+  send_img2.py      兼容壳 → send_followup.py（旧命令仍可用，2026-12-10 删除）
 references/
   greeting-playbook.md 打招呼语方法论原文（逐字，唯一权威来源）
   runbook.md        11 步完整执行细节 —— 遇到分支先查这里
@@ -330,7 +332,7 @@ WebBridge 也没有 focus/raise 动作。`hidden=true` 不是停手理由，是�
 | 能多账号并行吗 | 能，每个实例一个 `BOSS_WORKDIR` |
 | 没有智能体能用吗 | 能，`ledger.py` 记账 + 手动判卡，报表口径完全一致 |
 | 在 Google Antigravity 里怎么用 | `install.py --target antigravity`，它会在 `~/.gemini/config/skills/` 放一个入口指针；开新会话后 `/boss-daily-apply` 可手动调起，也会按 `description` 自动触发 |
-| 打招呼语怎么按 JD 定制 | Step 4 读完 JD 后跑 `greeting.py prompt` 组装提示词，智能体写好后跑 `greeting.py save` 经过 12 条机器硬指标校验落盘；补发时 `send_img2.py` 优先发送定制话术，取不到才退回通用方向桶 |
+| 打招呼语怎么按 JD 定制 | Step 4 读完 JD 后跑 `greeting.py prompt` 组装提示词，智能体写好后跑 `greeting.py save` 经过 12 条机器硬指标校验落盘；补发时 `send_followup.py` 优先发送定制话术，取不到才退回通用方向桶 |
 
 ---
 

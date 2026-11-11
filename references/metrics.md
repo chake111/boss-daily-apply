@@ -34,7 +34,7 @@
 |---|---|---|
 | `reply_events.jsonl` | 回复事件流，**只增不改**，按 (日期, 公司, 类别, 文本) 去重 | 只能 `reply_check.py` 追加 |
 | `pending_actions.json` | 待办台账。会话滑出列表也不会消失，只能 `--resolve` 关闭 | 人工 `--resolve` |
-| `img_mode_log.json` | 每份投递实际发的哪种图（A/B 分组依据） | 只能 `send_img2.py` 写 |
+| `img_mode_log.json` | 每份投递实际发的哪种图（A/B 分组依据） | 只能 `send_followup.py` 写 |
 
 > `stream_progress.json` / `walk_state.json` 仍然只由投递流程写。指标改造没有动它们。
 
@@ -54,7 +54,7 @@ python scripts/stats.py --strict           # 只算已过窗的，不要旧记�
 
 ## 简历图 A/B
 
-`send_img2.py --auto-img` 的行为：
+`send_followup.py --auto-img` 的行为：
 
 1. 按**公司名**的 md5 奇偶分桶（同一家公司永远在同一组，重发不会跨组）
 2. A 组 → 查 `resume/variants.json` 按投递方向选变体 → 现场渲染 → 发送

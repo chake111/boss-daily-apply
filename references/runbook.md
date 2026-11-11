@@ -349,11 +349,11 @@ python $SKILL_DIR/scripts/supply_probe.py --pages 2 --rounds <本次份数>
 本次投递过程中**分批补发**，不要攒到整批结束：
 
 - 图片：`<工作目录>/resume/resume.png`（或用 `BOSS_RESUME_IMG` 指定）
-- **换成按 JD 定制的图**：加 `--auto-img`（`python scripts/send_img2.py 5 --msg --auto-img`）。
+- **换成按 JD 定制的图**：加 `--auto-img`（`python scripts/send_followup.py 5 --msg --auto-img`）。
   脚本按公司名哈希分 A/B：A 组按 `direction` 查 `resume/variants.json` 现场渲染定制图，
   B 组照旧发通用图；实际发了哪种写进 `img_mode_log.json`，`stats.py` 的「按简历图（A/B）」表直接读它。
   分组是固定哈希，同一家公司永远同组，重发不会跨组。只想临时指一张图用 `--img <路径>`。
-- **节奏**：每投满 5 份跑一次 `python scripts/send_img2.py 5 --msg`；
+- **节奏**：每投满 5 份跑一次 `python scripts/send_followup.py 5 --msg`；
   收尾再把剩余不足 5 份的补齐（例：投了 17 份 → 5 + 5 + 5 + 2）
 - **它自己会用第二个标签**（session `boss-img`）做补发，搜索页和游标不受影响；
   万一第二标签起不来，加 `--same-tab` 退回旧行为（会抢占当前标签，之后要重新定位关键词页）
@@ -367,7 +367,7 @@ python $SKILL_DIR/scripts/supply_probe.py --pages 2 --rounds <本次份数>
   - 撞默认招呼语：调整首句前 6 字，避免判重恒真；
   - 确实无法生成或网络异常：放行投递，自动退回方向桶，并在对账中显式记录未定制缺口。
 - 同一家公司投了两个岗位时共用一个会话，只能发一句话，按**最后一次投递**的 direction 取桶。
-- 只想看匹配结果不动手：`python scripts/send_img2.py 5 --msg --dry`
+- 只想看匹配结果不动手：`python scripts/send_followup.py 5 --msg --dry`
 - 图已是最后一条会跳过发图只补话术；图 + 话术都发过会整体跳过，**不会重复发**
 - **判定成功只认「会话条数变多」**（输出形如 `IMG OK 841773 | 2->3 OK`）。
   出现 `NOT_SENT` / `图未入库` 就是没发出去，别当成功，记进异常——按「图片张数」判会被历史旧图骗成成功。
@@ -377,15 +377,15 @@ python $SKILL_DIR/scripts/supply_probe.py --pages 2 --rounds <本次份数>
   （实测 17 条全 FAIL）。
 - **份数就是「本次要补几家」**：分批时写 5，收尾写剩下的（别照抄第一行）
 - 会话列表只渲染最近 ~40 条，最早的会 `SKIP notfound`：改用公司短名逐个补，
-  `python scripts/send_img2.py 1 "某短名" --msg`
+  `python scripts/send_followup.py 1 "某短名" --msg`
 - **`SKIP 标题不符`**（会话标题显示的是 HR 名而不是公司名）：**先等 20 秒重试一次**——
   刚投的会话在列表里渲染有延迟，实测第一次 SKIP、20 秒后重试即成功；再不行才用短名补。
-- **`img 0->0 NOT_SENT` 但怀疑已发出**：直接用短名重跑 `send_img2.py 1 "短名"`，
+- **`img 0->0 NOT_SENT` 但怀疑已发出**：直接用短名重跑 `send_followup.py 1 "短名"`，
   脚本会检测"会话里已有我发的图"自动跳过发图、只补话术，不会重复发（实测有效）。
 - 同一公司两个岗位共用一个会话，报"已发过"是正常的，不用重发
 - 进会话前核对右侧标题栏的公司+岗位，对不上就跳过并报告
 - 发图失败先报告，别卡在发图上
-- 若 `send_img2.py` 不在，按这个逻辑重建：读文件 → base64 → 每 12 万字符一段
+- 若 `send_followup.py` 不在，按这个逻辑重建：读文件 → base64 → 每 12 万字符一段
   `evaluate("window.__b64+='...'")` → 页面内 `atob` 转 `Uint8Array` →
   `new File([blob],'resume.png',{type:'image/png'})` → 塞进 `.btn-sendimg input[type=file]` →
   派发 `change` 事件。
@@ -461,7 +461,7 @@ PYTHONPATH="$SKILL_DIR" python $SKILL_DIR/scripts/reply_check.py
 - 抓会话要连 WebBridge；桥没起来时会直接报错，此时用 `--list` 看台账、
   `--from <dump>` 回放上次结果都还能用
 - **`reply_check.py` 只读不发**：清单里 `kind=要简历` 的，要另跑
-  `python scripts/send_img2.py 1 "<公司短名>" --msg` 才会真发
+  `python scripts/send_followup.py 1 "<公司短名>" --msg` 才会真发
   （脚本对已发过的会输出 `SKIP 已发全`，属正常）。别以为跑完 reply_check 图就补了。
 - 「已拒」归档即可，不用回
 - 「已读未回」不催，催了容易被投诉/限流

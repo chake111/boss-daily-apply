@@ -138,7 +138,7 @@ BOSS 的懒加载直接停住。这不是"走空"，是"没加载"。
 
 **根因**：后台标签重渲染后计数读到 0。
 
-**处置**：`send_img2.py` 注入后会重新打开会话复查一次。
+**处置**：`send_followup.py` 注入后会重新打开会话复查一次。
 排查这类问题**看会话列表预览的 `[图片]` 比看计数器可靠**；别因为一次 NOT_SENT 就重发，
 先开会话数一下。
 
@@ -273,8 +273,8 @@ python scripts/bootstrap.py --migrate     # 确认"那是我的"之后再执行
 **处置**：补发按**记录**寻址，不按公司名：
 
 ```bash
-python scripts/send_img2.py --job <jobId> --msg --auto-img   # 精确一条
-python scripts/send_img2.py --pending --msg --auto-img       # 只补没补齐的
+python scripts/send_followup.py --job <jobId> --msg --auto-img   # 精确一条
+python scripts/send_followup.py --pending --msg --auto-img       # 只补没补齐的
 ```
 
 `pick_greeting(rec)` / `choose_image(rec)` 直接吃投递记录。验收：同一公司两条记录
@@ -335,13 +335,13 @@ A/B 按 `A:` / `B:` 前缀归一，别按 `A:ai-app` 这种完整 mode 分组。
 - `greetings.json` 里填 `own_default_greeting`（账号实际发的那条），
   `greeting_prefixes()` 检测到重叠会直接打 `WARN`。
 - 改文案后跑 `python scripts/acceptance.py`（第 [2] 节就是专门验这个的，撞车会直接红），
-  再跑一次 `send_img2.py 1 "<公司>" --dry` 确认桶和文案都对，然后才真发。
+  再跑一次 `send_followup.py 1 "<公司>" --dry` 确认桶和文案都对，然后才真发。
 
 ---
 
 ### 32. Playwright 后端连上调试浏览器 → 浏览器整体退出（WorkBuddy 沙箱）
 
-**现象**：在 WorkBuddy 沙箱里跑 `send_img2.py`（后端自动选 playwright），启动约 9 秒后
+**现象**：在 WorkBuddy 沙箱里跑 `send_followup.py`（后端自动选 playwright），启动约 9 秒后
 调试浏览器整体消失：首次 `Page.evaluate` 报 `Target page, context or browser has been closed`，
 随后全是 `连上的浏览器没有可用上下文`；`cdp_client.py --serve` 在下个 20s 检查周期报
 `端口已消失`。profile 里没有 Crashpad 转储——是**干净的退出**（最后标签被关/进程被收），
@@ -358,7 +358,7 @@ driver 一接入，浏览器就保不住**（driver 退出/回收时的清理会
 - 排障口诀：serve 报"端口已消失"、且日志里第一句 evaluate 就是 "browser has been closed"
   ——先 `BOSS_BACKEND=cdp` 再说，别去怀疑脚本逻辑（`list_not_ready` 在浏览器死后是必然症状，
   曾经因此误修过 3 轮）。
-- 探针 / 补发 / 收尾一律建议：`BOSS_BACKEND=cdp python scripts/send_img2.py ... --same-tab`。
+- 探针 / 补发 / 收尾一律建议：`BOSS_BACKEND=cdp python scripts/send_followup.py ... --same-tab`。
 
 ---
 
@@ -375,7 +375,7 @@ driver 一接入，浏览器就保不住**（driver 退出/回收时的清理会
 3. `data-rb3` 标记点完**必须清掉**：残留标记会让下一次 `querySelector('[data-rb3]')`
    命中上一个会话，看起来"定位成功"实际点开了别人（已实测把消息发给错的会话风险拦在验证层）。
 
-**处置**：`send_img2.locate_conv_by_data()` 按数据索引滚动 + 喂事件，`company_keys()` 多键匹配，
+**处置**：`send_followup.locate_conv_by_data()` 按数据索引滚动 + 喂事件，`company_keys()` 多键匹配，
 每次定位前清残留标记。另外右侧标题栏有些会话**不显示公司名**（只显示 HR+岗位），
 标题验证要接受「点击前公司键命中 + 标题栏岗位片段一致」。
 
@@ -456,7 +456,7 @@ Anker 的「AI应用开发」和「大数据」），补发时定位到隔壁岗
 **处置**：
 - 新增 `_js_click_card(jid)`：`a.closest('li').click()`，`open` / `_try_locate_card` 在
   原生点击后面板仍不对时用它兜底。
-- `send_img2` 打开会话：先 JS `click` 再补一次鼠标 `click`（打开会话幂等，重复点不会发消息）。
+- `send_followup` 打开会话：先 JS `click` 再补一次鼠标 `click`（打开会话幂等，重复点不会发消息）。
 - **判断是否踩坑**：`panel_ok:false` 但 `detail` 有内容且是别的岗位 → 就是这条。
 
 ### 39. 聊天会话列表改版：不再显示岗位名，岗位名匹配全线失效

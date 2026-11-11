@@ -123,7 +123,9 @@ scripts/
   keyword_health.py 词表健康：连续两轮挖空的词自动跳过，不再重复扫同一批卡
   supply_probe.py   探供给，按证据强度出配额，写 supply.json（翻页未换内容会标 SAME）
   screen.py         机械否决（黑名单在 config/blacklist.json）
-  send_img2.py      补发简历图 + 按方向一句话（WorkBuddy 用 CDP + --same-tab；第二标签实验性）
+  send_followup.py  补发简历图 + 按方向一句话（WorkBuddy 用 CDP + --same-tab；第二标签实验性）
+  send_img.py       兼容壳 → browser_ops.py（旧命令仍可用，2026-12-10 删除）
+  send_img2.py      兼容壳 → send_followup.py（旧命令仍可用，2026-12-10 删除）
   render_resume.py  逐岗位定制：配置 -> 单页 PNG，文件名按 BOSS 的 80 字节上限裁剪
   apply_one.py      投一份并当场补发**这一份**的简历图（定制流程专用，见 references/per-job-tailoring.md）
   daily_close.py    收尾对账：谁还没送简历图 / 谁没发话术（只读，给逐条补发命令）
@@ -344,12 +346,12 @@ $DRV walk --next
 ### Step 6 · 分批补发简历图 + 一句话
 
 ```bash
-BOSS_BACKEND=cdp python "$SKILL_DIR/scripts/send_img2.py" 5 --msg --same-tab  # 每满 5 份跑一次
-BOSS_BACKEND=cdp python "$SKILL_DIR/scripts/send_img2.py" 2 --msg --same-tab  # 收尾补剩余
-BOSS_BACKEND=cdp python "$SKILL_DIR/scripts/send_img2.py" 1 "公司短名" --msg --same-tab
-BOSS_BACKEND=cdp python "$SKILL_DIR/scripts/send_img2.py" --job <jobId> --msg --auto-img --same-tab
-BOSS_BACKEND=cdp python "$SKILL_DIR/scripts/send_img2.py" --pending --msg --auto-img --same-tab
-BOSS_BACKEND=cdp python "$SKILL_DIR/scripts/send_img2.py" --pending --include-legacy --msg --auto-img --same-tab
+BOSS_BACKEND=cdp python "$SKILL_DIR/scripts/send_followup.py" 5 --msg --same-tab  # 每满 5 份跑一次
+BOSS_BACKEND=cdp python "$SKILL_DIR/scripts/send_followup.py" 2 --msg --same-tab  # 收尾补剩余
+BOSS_BACKEND=cdp python "$SKILL_DIR/scripts/send_followup.py" 1 "公司短名" --msg --same-tab
+BOSS_BACKEND=cdp python "$SKILL_DIR/scripts/send_followup.py" --job <jobId> --msg --auto-img --same-tab
+BOSS_BACKEND=cdp python "$SKILL_DIR/scripts/send_followup.py" --pending --msg --auto-img --same-tab
+BOSS_BACKEND=cdp python "$SKILL_DIR/scripts/send_followup.py" --pending --include-legacy --msg --auto-img --same-tab
 ```
 
 - **`--pending` 从最旧的积压开始补**（不是台账最新几条），可断点续跑；`--pending` + 数字可以
@@ -367,7 +369,7 @@ BOSS_BACKEND=cdp python "$SKILL_DIR/scripts/send_img2.py" --pending --include-le
   并非零退出；只有真正 `NOT_FOUND` 才是公司级 SKIP。登录/验证出现时不得重试或绕过。
 - **按记录寻址，不按公司名**：同一家投了两个岗位时，用 `--job <jobId>` 才不会串档
   （按公司反查会拿到后投的那条，AI 岗收到数据岗的话术）。
-- **话术优先取该岗位的定制文件**：`send_img2.py` 优先查找 `<工作目录>/greetings/<jobId>.json`，
+- **话术优先取该岗位的定制文件**：`send_followup.py` 优先查找 `<工作目录>/greetings/<jobId>.json`，
   取到即发送专用定制话术（`src=jd`）；取不到才按 `direction` 映射到 `greetings.json` 的方向桶（`src=direction`）。
   方向没标或标了 `其他` 的走 `generic` 兜底。
   去重采用首 18 字与末 12 字双锚点指纹比对，杜绝定制文案重复补发或漏发。
@@ -396,7 +398,7 @@ python "$SKILL_DIR/scripts/phase_stream.py" --mode report --workdir "$BOSS_WORKD
 加量没有意义，要直说。
 
 `daily_close.py` 会列出「投了但没送简历图 / 没发话术」的记录，并给出逐条可复制的
-`send_img2.py --job <jobId>` 命令。**把缺口清单原样贴给用户**，让他决定当场补还是明天补——
+`send_followup.py --job <jobId>` 命令。**把缺口清单原样贴给用户**，让他决定当场补还是明天补——
 它不是门禁（`--strict` 才会在有缺口时退出 1）。只读、不碰浏览器,重跑结果一致。
 
 然后打开 `$BOSS_WORKDIR/投递汇总.html`：能预览 HTML 的工具就预览，
@@ -417,7 +419,7 @@ PYTHONPATH="$SKILL_DIR" python "$SKILL_DIR/scripts/reply_check.py"
 
 输出「待我动作」清单（要简历 / 网申·测评 / 约面试），**逐条写进汇报**。
 待办是台账不是快照：`--list` 看全部、`--resolve <id>` 关掉。
-**`reply_check.py` 只读不发**——`kind=要简历` 的还得另跑 `send_img2.py 1 "<短名>" --msg`。
+**`reply_check.py` 只读不发**——`kind=要简历` 的还得另跑 `send_followup.py 1 "<短名>" --msg`。
 
 约到面试就立刻记一站，否则漏斗永远停在「待我动作」，`decide.py` 也就永远算不出断点：
 
